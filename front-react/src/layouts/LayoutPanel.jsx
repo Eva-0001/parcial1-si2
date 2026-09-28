@@ -1,6 +1,7 @@
 import { Suspense, useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router'
 import { useAuth, useAuthStore } from '@/core/stores/auth.store'
+import { useVentasEnCola } from '@/core/offline/cola-ventas.store'
 import { cx } from '@/shared/utils/clases'
 
 const MENUS = {
@@ -19,7 +20,13 @@ const MENUS = {
       titulo: 'Operaciones',
       items: [
         { icono: 'analytics', etiqueta: 'Inventario global', ruta: '/panel/inventario' },
+        { icono: 'warehouse', etiqueta: 'Almacenes', ruta: '/panel/almacenes' },
         { icono: 'receipt_long', etiqueta: 'Ventas', ruta: '/panel/ventas' },
+        { icono: 'local_shipping', etiqueta: 'Pedidos online', ruta: '/panel/pedidos' },
+        { icono: 'point_of_sale', etiqueta: 'Punto de venta', ruta: '/panel/pos' },
+        { icono: 'account_balance_wallet', etiqueta: 'Mi caja', ruta: '/panel/caja' },
+        { icono: 'schedule', etiqueta: 'Turnos y arqueos', ruta: '/panel/turnos' },
+        { icono: 'cloud_sync', etiqueta: 'Sincronización', ruta: '/panel/sincronizacion' },
         { icono: 'confirmation_number', etiqueta: 'Comprobantes', ruta: '/panel/comprobantes' },
         { icono: 'history', etiqueta: 'Bitácora', ruta: '/panel/bitacora' },
         { icono: 'psychology', etiqueta: 'Reportes con IA', ruta: '/panel/reportes' },
@@ -41,8 +48,11 @@ const MENUS = {
       titulo: null,
       items: [
         { icono: 'event', etiqueta: 'Reservas de mi sucursal', ruta: '/panel/reservas-sucursal' },
+        { icono: 'local_shipping', etiqueta: 'Pedidos online', ruta: '/panel/pedidos' },
         { icono: 'inventory_2', etiqueta: 'Stock de mi sucursal', ruta: '/panel/stock' },
+        { icono: 'warehouse', etiqueta: 'Almacenes', ruta: '/panel/almacenes' },
         { icono: 'receipt_long', etiqueta: 'Ventas de mi sucursal', ruta: '/panel/ventas-sucursal' },
+        { icono: 'schedule', etiqueta: 'Turnos y arqueos', ruta: '/panel/turnos' },
         { icono: 'psychology', etiqueta: 'Reportes con IA', ruta: '/panel/reportes' },
       ],
     },
@@ -52,6 +62,10 @@ const MENUS = {
       titulo: null,
       items: [
         { icono: 'point_of_sale', etiqueta: 'Punto de venta', ruta: '/panel/pos' },
+        { icono: 'local_shipping', etiqueta: 'Pedidos online', ruta: '/panel/pedidos' },
+        { icono: 'account_balance_wallet', etiqueta: 'Mi caja', ruta: '/panel/caja' },
+        { icono: 'schedule', etiqueta: 'Mis turnos', ruta: '/panel/turnos' },
+        { icono: 'cloud_sync', etiqueta: 'Sincronización', ruta: '/panel/sincronizacion' },
         { icono: 'psychology', etiqueta: 'Reportes con IA', ruta: '/panel/reportes' },
       ],
     },
@@ -83,7 +97,17 @@ export default function LayoutPanel() {
   const u = auth.usuario
   const iniciales = u ? `${u.nombre.charAt(0)}${u.apellido.charAt(0)}`.toUpperCase() : ''
 
+  const enCola = useVentasEnCola(auth.usuario?.id)
+
   const cerrarSesion = () => {
+    if (
+      enCola.length > 0 &&
+      !window.confirm(
+        `Tienes ${enCola.length} venta(s) sin sincronizar en este equipo. Se enviarán cuando vuelvas a iniciar sesión aquí. ¿Cerrar sesión igual?`,
+      )
+    ) {
+      return
+    }
     logout()
     navigate('/login')
   }
@@ -185,7 +209,10 @@ export default function LayoutPanel() {
             >
               <span className="material-symbols-outlined">menu</span>
             </button>
-            <Link to="/" className="hidden items-center gap-1 text-xs text-on-surface-variant hover:text-primary sm:flex">
+            <Link
+              to="/"
+              className="hidden items-center gap-1 text-xs text-on-surface-variant hover:text-primary sm:flex"
+            >
               <span className="material-symbols-outlined text-[16px]">storefront</span>
               Ver tienda
             </Link>

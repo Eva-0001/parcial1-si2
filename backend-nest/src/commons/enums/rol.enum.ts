@@ -15,6 +15,9 @@ export const CAPACIDAD = {
   inventario: [Rol.ADMINISTRADOR, Rol.ENCARGADO],
   caja: [Rol.ADMINISTRADOR, Rol.CAJERO],
   reservas: [Rol.ADMINISTRADOR, Rol.ENCARGADO],
+  pedidos: [Rol.ADMINISTRADOR, Rol.ENCARGADO],
+  /** Ver pedidos en linea y aceptar sus pagos (comprobante QR, cobro contraentrega). */
+  pagosPedidos: [Rol.ADMINISTRADOR, Rol.ENCARGADO, Rol.CAJERO],
   reportes: [Rol.ADMINISTRADOR, Rol.ENCARGADO, Rol.CAJERO],
   venta: [Rol.ADMINISTRADOR, Rol.ENCARGADO, Rol.CAJERO, Rol.CLIENTE],
 } as const satisfies Record<string, readonly Rol[]>;

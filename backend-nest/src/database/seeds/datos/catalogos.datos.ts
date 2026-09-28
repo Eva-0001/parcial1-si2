@@ -7,6 +7,16 @@ export const CIUDADES = [
   'El Alto',
 ] as const;
 
+/** Tarifa de envio a domicilio (Bs) de las ciudades sembradas. */
+export const COSTO_ENVIO: Record<(typeof CIUDADES)[number], string> = {
+  'Santa Cruz de la Sierra': '15.00',
+  'La Paz': '25.00',
+  Cochabamba: '25.00',
+  Sucre: '35.00',
+  Tarija: '35.00',
+  'El Alto': '25.00',
+};
+
 export const CATEGORIAS = [
   'Poleras',
   'Camisas',

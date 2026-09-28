@@ -1,10 +1,16 @@
+import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 
 export class RecomendacionesDto {
@@ -29,6 +35,16 @@ export class RecomendacionesDto {
   preferencias?: string;
 }
 
+/** Un mensaje anterior del chat, para que el asistente entienda los seguimientos. */
+export class TurnoDeChatDto {
+  @IsIn(['cliente', 'asistente'])
+  rol: 'cliente' | 'asistente';
+
+  @IsString()
+  @MaxLength(1500)
+  texto: string;
+}
+
 export class AsistenteDto {
   @IsString()
   @IsNotEmpty()
@@ -39,6 +55,15 @@ export class AsistenteDto {
   @IsInt()
   @Min(1)
   sucursal_id?: number;
+
+  /** Ultimos mensajes de la conversacion, del mas viejo al mas nuevo (se usan los 12 ultimos). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => TurnoDeChatDto)
+  @ApiProperty({ type: [TurnoDeChatDto], required: false })
+  historial?: TurnoDeChatDto[];
 }
 
 export class ReporteIaDto {

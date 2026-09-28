@@ -11,8 +11,8 @@ export const pagosService = {
     return http.get('/pagos/config')
   },
 
-  crearIntencion(detalles) {
-    return http.post('/pagos/intencion', { detalles })
+  crearIntencion(detalles, entrega = null) {
+    return http.post('/pagos/intencion', entrega ? { detalles, entrega } : { detalles })
   },
 
   stripe() {

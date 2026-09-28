@@ -1,11 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
+import { Almacen } from '../entities/almacen.entity.js';
 import { Ciudad } from '../entities/ciudad.entity.js';
 import { DetalleVenta } from '../entities/detalle-venta.entity.js';
+import { Envio } from '../entities/envio.entity.js';
+import { MovimientoAlmacen } from '../entities/movimiento-almacen.entity.js';
 import { Promocion } from '../entities/promocion.entity.js';
 import { ReservaSucursal } from '../entities/reserva-sucursal.entity.js';
 import { Sucursal } from '../entities/sucursal.entity.js';
+import { TurnoCaja } from '../entities/turno-caja.entity.js';
 
 @Injectable()
 export class CiudadesRepository {
@@ -29,8 +33,14 @@ export class CiudadesRepository {
     );
   }
 
-  tieneSucursales(id: number): Promise<boolean> {
-    return this.sucursales.existsBy({ ciudad_id: id });
+  async tieneSucursales(id: number): Promise<boolean> {
+    const manager = this.ciudades.manager;
+    const [conSucursales, conAlmacenes, conEnvios] = await Promise.all([
+      this.sucursales.existsBy({ ciudad_id: id }),
+      manager.getRepository(Almacen).existsBy({ ciudad_id: id }),
+      manager.getRepository(Envio).existsBy({ ciudad_id: id }),
+    ]);
+    return conSucursales || conAlmacenes || conEnvios;
   }
 
   crear(datos: Partial<Ciudad>): Promise<Ciudad> {
@@ -93,7 +103,15 @@ export class SucursalesRepository {
         .where('stock.sucursal_id = :id', { id })
         .getExists(),
     ]);
-    return conVentas || conReservas;
+    if (conVentas || conReservas) return true;
+
+    const manager = this.sucursales.manager;
+    const [conTurnos, conMovimientos, conEnvios] = await Promise.all([
+      manager.getRepository(TurnoCaja).existsBy({ sucursal_id: id }),
+      manager.getRepository(MovimientoAlmacen).existsBy({ sucursal_id: id }),
+      manager.getRepository(Envio).existsBy({ sucursal_id: id }),
+    ]);
+    return conTurnos || conMovimientos || conEnvios;
   }
 
   crear(datos: Partial<Sucursal>): Promise<Sucursal> {

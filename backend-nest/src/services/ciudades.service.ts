@@ -52,7 +52,7 @@ export class CiudadesService {
 
     if (await this.repo.tieneSucursales(id)) {
       throw new ConflictException(
-        'No se puede eliminar la ciudad porque tiene sucursales asociadas',
+        'No se puede eliminar la ciudad porque tiene sucursales, almacenes o envios asociados',
       );
     }
 

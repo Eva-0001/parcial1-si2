@@ -2,6 +2,7 @@ import axios from 'axios'
 import { env } from '@/config/env'
 import { ApiError } from './ApiError'
 import { obtenerToken, useAuthStore } from '../stores/auth.store'
+import { HEADER_DESDE_CACHE, marcarConexion } from '../offline/conexion.store'
 
 export const http = axios.create({ baseURL: env.apiUrl })
 
@@ -12,9 +13,14 @@ http.interceptors.request.use((config) => {
 })
 
 http.interceptors.response.use(
-  (res) => res.data,
+  (res) => {
+    marcarConexion(!res.headers?.[HEADER_DESDE_CACHE])
+    return res.data
+  },
   (error) => {
     const status = error.response?.status ?? 0
+    if (status === 0) marcarConexion(false)
+    else marcarConexion(true)
     const esLogin = (error.config?.url ?? '').includes('/auth/login')
     if (status === 401 && !esLogin) {
       useAuthStore.getState().expirarSesion()

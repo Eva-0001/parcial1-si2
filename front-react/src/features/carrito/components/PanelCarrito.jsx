@@ -96,7 +96,7 @@ export default function PanelCarrito() {
             </div>
           ) : (
             <ul className="divide-y divide-outline-variant">
-              {carrito.items.map((item) => (
+              {carrito.lineas.map((item) => (
                 <li key={item.producto_sucursal_id} className="flex gap-3 py-4">
                   <div className="h-20 w-16 shrink-0 overflow-hidden rounded-lg bg-surface-container">
                     {item.foto ? (
@@ -155,9 +155,18 @@ export default function PanelCarrito() {
                         </button>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm font-bold text-on-surface">{monedaBs(item.precio * item.cantidad)}</p>
-                        {item.cantidad > 1 && (
-                          <p className="text-[11px] text-on-surface-variant">{monedaBs(item.precio)} c/u</p>
+                        <p className="text-sm font-bold text-on-surface">
+                          {monedaBs(item.precio_aplicado * item.cantidad)}
+                        </p>
+                        {item.por_mayor ? (
+                          <p className="text-[11px] text-success">
+                            <span className="line-through opacity-70">{monedaBs(item.precio)}</span>{' '}
+                            {monedaBs(item.precio_aplicado)} c/u por mayor
+                          </p>
+                        ) : (
+                          item.cantidad > 1 && (
+                            <p className="text-[11px] text-on-surface-variant">{monedaBs(item.precio)} c/u</p>
+                          )
                         )}
                       </div>
                     </div>
@@ -173,10 +182,31 @@ export default function PanelCarrito() {
 
         {carrito.items.length > 0 && (
           <footer className="border-t border-outline-variant px-5 py-4">
+            {carrito.porMayor ? (
+              <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-success/10 px-3 py-2 text-xs font-semibold text-success">
+                <span className="material-symbols-outlined text-[16px]">sell</span>
+                Precio por mayor aplicado: ahorras {monedaBs(carrito.ahorroMayor)}
+              </p>
+            ) : (
+              carrito.faltanParaMayor > 0 &&
+              carrito.faltanParaMayor <= 3 && (
+                <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-surface-container px-3 py-2 text-xs text-on-surface">
+                  <span className="material-symbols-outlined text-[16px] text-primary">sell</span>
+                  Agrega {carrito.faltanParaMayor} {carrito.faltanParaMayor === 1 ? 'prenda' : 'prendas'} con precio por
+                  mayor para pagar menos por todas
+                </p>
+              )
+            )}
             <div className="flex justify-between text-sm text-on-surface-variant">
               <span>Subtotal</span>
-              <span className="tabular-nums">{monedaBs(carrito.subtotal)}</span>
+              <span className="tabular-nums">{monedaBs(carrito.subtotal + carrito.ahorroMayor)}</span>
             </div>
+            {carrito.porMayor && (
+              <div className="flex justify-between text-sm text-success">
+                <span>Precio por mayor</span>
+                <span className="tabular-nums">−{monedaBs(carrito.ahorroMayor)}</span>
+              </div>
+            )}
             <div className="mt-1 flex justify-between text-base font-bold text-on-surface">
               <span>Total</span>
               <span className="tabular-nums">{monedaBs(carrito.total)}</span>

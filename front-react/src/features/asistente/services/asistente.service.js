@@ -5,7 +5,12 @@ export const asistenteService = {
     return http.get('/ia/estado')
   },
 
-  consultar(mensaje, sucursalId) {
-    return http.post('/ia/asistente', { mensaje, ...(sucursalId ? { sucursal_id: sucursalId } : {}) })
+  /** `historial`: mensajes anteriores [{ rol: 'cliente' | 'asistente', texto }], del más viejo al más nuevo. */
+  consultar(mensaje, sucursalId, historial = []) {
+    return http.post('/ia/asistente', {
+      mensaje,
+      ...(sucursalId ? { sucursal_id: sucursalId } : {}),
+      ...(historial.length ? { historial } : {}),
+    })
   },
 }

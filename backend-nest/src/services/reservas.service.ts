@@ -47,7 +47,10 @@ export class ReservasService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     this.limpieza = setInterval(() => {
       this.liberarVencidas().catch((error: unknown) =>
-        this.logger.error('No se pudieron liberar las reservas vencidas', error),
+        this.logger.error(
+          'No se pudieron liberar las reservas vencidas',
+          error,
+        ),
       );
     }, MINUTOS_ENTRE_LIMPIEZAS * 60_000);
   }

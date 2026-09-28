@@ -16,6 +16,7 @@ const OPCIONES_FILTRO = [
   ['todas', 'Todas'],
   ['virtual', 'Virtuales'],
   ['presencial', 'Presenciales'],
+  ['mayor', 'Por mayor'],
 ]
 
 export default function VentasAdmin() {
@@ -37,7 +38,8 @@ export default function VentasAdmin() {
   const texto = busqueda.trim().toLowerCase()
   const filtradas = ventas
     .filter((v) => {
-      if (filtro !== 'todas' && v.tipo_venta !== filtro) return false
+      if (filtro === 'mayor' && v.modalidad !== 'mayor') return false
+      if (filtro !== 'todas' && filtro !== 'mayor' && v.tipo_venta !== filtro) return false
       if (!texto) return true
       const u = usuarios.get(v.usuario_id)
       return (
@@ -257,6 +259,7 @@ export default function VentasAdmin() {
                         <span className={cx('inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold', CHIP_TIPO[v.tipo_venta])}>
                           {ETIQUETA_TIPO[v.tipo_venta]}
                         </span>
+                        {v.modalidad === 'mayor' && <span className="chip ml-1 text-success">Por mayor</span>}
                       </td>
                       <td className="text-right font-semibold tabular-nums">{monedaBs(v.total)}</td>
                       <td onClick={(e) => e.stopPropagation()}>

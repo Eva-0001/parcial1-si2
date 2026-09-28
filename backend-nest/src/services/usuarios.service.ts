@@ -105,7 +105,7 @@ export class UsuariosService {
 
     if (await this.repo.tieneMovimientos(id)) {
       throw new ConflictException(
-        'No se puede eliminar el usuario porque tiene ventas o reservas',
+        'No se puede eliminar el usuario porque tiene ventas, reservas, turnos de caja o movimientos de almacen',
       );
     }
 

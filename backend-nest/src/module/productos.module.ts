@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ArchivosModule } from '../commons/archivos/archivos.module.js';
+import { ModelosController } from '../controllers/modelos.controller.js';
 import { ProductosController } from '../controllers/productos.controller.js';
 import { StockController } from '../controllers/stock.controller.js';
 import { Categoria } from '../entities/categoria.entity.js';
 import { Coleccion } from '../entities/coleccion.entity.js';
 import { Color } from '../entities/color.entity.js';
 import { DetalleVenta } from '../entities/detalle-venta.entity.js';
+import { Modelo } from '../entities/modelo.entity.js';
 import { Producto } from '../entities/producto.entity.js';
 import { ProductoSucursal } from '../entities/producto-sucursal.entity.js';
 import { Proveedor } from '../entities/proveedor.entity.js';
@@ -18,12 +20,15 @@ import {
   ProductosRepository,
   StockRepository,
 } from '../repositories/productos.repository.js';
+import { ModelosRepository } from '../repositories/modelos.repository.js';
+import { ModelosService } from '../services/modelos.service.js';
 import { ProductosService } from '../services/productos.service.js';
 import { StockService } from '../services/stock.service.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
+      Modelo,
       Producto,
       ProductoSucursal,
       Sucursal,
@@ -38,10 +43,12 @@ import { StockService } from '../services/stock.service.js';
     ]),
     ArchivosModule,
   ],
-  controllers: [ProductosController, StockController],
+  controllers: [ModelosController, ProductosController, StockController],
   providers: [
     ProductosRepository,
+    ModelosRepository,
     StockRepository,
+    ModelosService,
     ProductosService,
     StockService,
   ],

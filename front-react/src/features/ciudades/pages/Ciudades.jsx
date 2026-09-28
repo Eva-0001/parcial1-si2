@@ -5,6 +5,7 @@ import { sucursalesService } from '@/features/sucursales/services/sucursales.ser
 import { toast } from '@/core/stores/toast.store'
 import Tabla from '@/shared/components/Tabla'
 import ModalConfirmacion from '@/shared/components/ModalConfirmacion'
+import { monedaBs } from '@/shared/utils/moneda-bs'
 
 export default function Ciudades() {
   const [cargando, setCargando] = useState(true)
@@ -151,6 +152,7 @@ export default function Ciudades() {
               <tr>
                 <th>Ciudad</th>
                 <th>Sucursales</th>
+                <th>Envío a domicilio</th>
                 <th className="text-right">Acciones</th>
               </tr>
             </thead>
@@ -168,6 +170,13 @@ export default function Ciudades() {
                         </span>
                       ) : (
                         <span className="chip-suave">Sin sucursales</span>
+                      )}
+                    </td>
+                    <td className="tabular-nums">
+                      {ciudad.costo_envio !== null && ciudad.costo_envio !== undefined ? (
+                        monedaBs(ciudad.costo_envio)
+                      ) : (
+                        <span className="chip-suave">Sin cobertura</span>
                       )}
                     </td>
                     <td>

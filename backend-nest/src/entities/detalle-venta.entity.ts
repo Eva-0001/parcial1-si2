@@ -20,6 +20,16 @@ export class DetalleVenta {
   @Column({ name: 'precio', type: 'numeric', precision: 10, scale: 2 })
   precio: string;
 
+  /** Precio por menor de la sucursal al momento de vender; difiere de precio si fue por mayor. */
+  @Column({
+    name: 'precio_lista',
+    type: 'numeric',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+  })
+  precio_lista: string | null;
+
   @Column({ name: 'venta_id', type: 'int' })
   venta_id: number;
 

@@ -214,6 +214,7 @@ export default function VentasSucursal() {
                     <span className={cx('inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold', CHIP_TIPO[v.tipo_venta])}>
                       {ETIQUETA_TIPO[v.tipo_venta]}
                     </span>
+                    {v.modalidad === 'mayor' && <span className="chip ml-1 text-success">Por mayor</span>}
                   </td>
                   <td className="text-center tabular-nums">{unidadesDeVenta(v)}</td>
                   <td className="text-right font-semibold tabular-nums">{monedaBs(v.total)}</td>

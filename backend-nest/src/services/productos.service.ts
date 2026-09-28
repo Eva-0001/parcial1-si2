@@ -11,7 +11,9 @@ import type {
   FiltroProductosDto,
 } from '../dto/producto.dto.js';
 import type { Producto } from '../entities/producto.entity.js';
+import { ModelosRepository } from '../repositories/modelos.repository.js';
 import { ProductosRepository } from '../repositories/productos.repository.js';
+import { ModelosService, nombreVariante } from './modelos.service.js';
 
 const NO_ENCONTRADO = 'Producto no encontrado';
 
@@ -21,6 +23,8 @@ const CARPETA_FOTOS = 'productos';
 export class ProductosService {
   constructor(
     private readonly repo: ProductosRepository,
+    private readonly modelosRepo: ModelosRepository,
+    private readonly modelos: ModelosService,
     private readonly archivos: ArchivosService,
   ) {}
 
@@ -40,11 +44,13 @@ export class ProductosService {
     return producto;
   }
 
-  async crear(datos: CrearProductoDto): Promise<Producto> {
-    await this.verificarCatalogos(datos);
-    return this.repo.crear(datos);
+  /** Agrega una variante (talla x color) a un modelo existente. */
+  crear(datos: CrearProductoDto): Promise<Producto> {
+    const { modelo_id: modeloId, ...variante } = datos;
+    return this.modelos.agregarVariante(modeloId, variante);
   }
 
+  /** Edita lo propio de la variante; lo comun (nombre base, categoria...) va por el modelo. */
   async actualizar(
     id: number,
     datos: ActualizarProductoDto,
@@ -53,7 +59,20 @@ export class ProductosService {
     await this.verificarCatalogos(datos);
 
     Object.assign(producto, datos);
-    return this.repo.guardar(producto);
+    if (datos.sku !== undefined) producto.sku = datos.sku.trim();
+    this.modelos.verificarPrecioMayor(producto.precio, producto.precio_mayor);
+
+    if (datos.color_id !== undefined || datos.talla_id !== undefined) {
+      const modelo = await this.modelos.obtener(producto.modelo_id);
+      const { color, talla } = await this.modelosRepo.nombres(
+        producto.color_id,
+        producto.talla_id,
+      );
+      producto.nombre = nombreVariante(modelo.nombre, color, talla);
+    }
+
+    await this.modelos.conUnicidad(() => this.repo.guardar(producto));
+    return this.obtenerCompleto(id);
   }
 
   async eliminar(id: number): Promise<{ mensaje: string }> {
@@ -61,7 +80,7 @@ export class ProductosService {
 
     if (await this.repo.tieneStock(id)) {
       throw new ConflictException(
-        'No se puede eliminar el producto porque tiene stock en sucursales',
+        'No se puede eliminar el producto porque tiene stock en sucursales o movimientos en almacenes',
       );
     }
 

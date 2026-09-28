@@ -28,7 +28,11 @@ async function bootstrap() {
   );
 
   await mkdir(uploads.carpeta, { recursive: true });
-  app.useStaticAssets(uploads.carpeta, { prefix: `${URL_PUBLICA_UPLOADS}/` });
+  // dotfiles: 'deny' -> la carpeta .privado (comprobantes de pago) nunca se sirve en publico.
+  app.useStaticAssets(uploads.carpeta, {
+    prefix: `${URL_PUBLICA_UPLOADS}/`,
+    dotfiles: 'deny',
+  });
 
   const documento = SwaggerModule.createDocument(
     app,

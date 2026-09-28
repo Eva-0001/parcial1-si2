@@ -31,7 +31,10 @@ function nombrePublico(archivo: string): string {
  */
 export async function copiarImagenesDeSeed(): Promise<Map<string, string>> {
   const origen = resolve(process.env.SEED_DIR || 'seed');
-  const destino = join(resolve(process.env.UPLOAD_DIR || 'uploads'), SUBCARPETA);
+  const destino = join(
+    resolve(process.env.UPLOAD_DIR || 'uploads'),
+    SUBCARPETA,
+  );
   const rutas = new Map<string, string>();
 
   let archivos: string[];

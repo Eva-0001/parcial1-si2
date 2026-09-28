@@ -15,6 +15,7 @@ import { Color } from '../../entities/color.entity.js';
 import { Comprobante } from '../../entities/comprobante.entity.js';
 import { DetalleVenta } from '../../entities/detalle-venta.entity.js';
 import { ProductoSucursal } from '../../entities/producto-sucursal.entity.js';
+import { Modelo } from '../../entities/modelo.entity.js';
 import { Producto } from '../../entities/producto.entity.js';
 import { Promocion } from '../../entities/promocion.entity.js';
 import { Proveedor } from '../../entities/proveedor.entity.js';
@@ -30,6 +31,7 @@ import { Venta } from '../../entities/venta.entity.js';
 import {
   CATEGORIAS,
   CIUDADES,
+  COSTO_ENVIO,
   COLECCIONES,
   COLORES,
   PROMOCIONES,
@@ -43,6 +45,7 @@ import {
   PERSONAL,
   type DatosUsuario,
 } from './datos/personas.datos.js';
+import { nombreVariante, skuGenerado } from '../../services/modelos.service.js';
 import { DISENOS } from './datos/productos.datos.js';
 import { copiarImagenesDeSeed } from './imagenes.js';
 import {
@@ -80,7 +83,9 @@ interface FilaDeStock {
 // Base: roles y administrador. Corre siempre, en cada arranque.
 // --------------------------------------------------------------------------
 
-async function sembrarRoles(manager: EntityManager): Promise<Map<string, number>> {
+async function sembrarRoles(
+  manager: EntityManager,
+): Promise<Map<string, number>> {
   return asegurarPorNombre(manager, Rol, ROLES_DEL_SISTEMA);
 }
 
@@ -159,6 +164,17 @@ async function sembrarCatalogos(manager: EntityManager): Promise<Catalogos> {
     proveedores,
   };
 
+  // Solo completa tarifas vacias: no pisa las que ajusto el administrador.
+  for (const [nombre, costo] of Object.entries(COSTO_ENVIO)) {
+    await manager
+      .getRepository(Ciudad)
+      .createQueryBuilder()
+      .update()
+      .set({ costo_envio: costo })
+      .where('nombre = :nombre AND costo_envio IS NULL', { nombre })
+      .execute();
+  }
+
   console.log(
     `catalogos: ${CIUDADES.length} ciudades, ${CATEGORIAS.length} categorias, ` +
       `${COLECCIONES.length} colecciones, ${COLORES.length} colores, ` +
@@ -202,7 +218,9 @@ async function sembrarPersonas(
   roles: Map<string, number>,
   sucursales: Map<string, number>,
 ): Promise<{ personal: Usuario[]; clientes: Usuario[] }> {
-  const password = await hashearPassword(process.env.SEED_PASSWORD || 'demo1234');
+  const password = await hashearPassword(
+    process.env.SEED_PASSWORD || 'demo1234',
+  );
   const hoy = new Date();
 
   const crear = async (datos: DatosUsuario): Promise<Usuario> => {
@@ -266,6 +284,7 @@ async function sembrarProductos(
   imagenes: Map<string, string>,
 ): Promise<{ id: number; nombre: string; precio: number }[]> {
   const repo = manager.getRepository(Producto);
+  const repoModelos = manager.getRepository(Modelo);
   const productos: { id: number; nombre: string; precio: number }[] = [];
   let sinFoto = 0;
 
@@ -273,24 +292,53 @@ async function sembrarProductos(
     const foto = imagenes.get(diseno.archivo) ?? null;
     if (!foto) sinFoto++;
 
-    for (const talla of diseno.tallas) {
-      const nombre = `${diseno.base} - Talla ${talla}`;
+    // Cada diseno es un producto base (modelo); cada talla, una variante suya.
+    const comunes = {
+      // Las poleras se venden tambien por mayor: 25% menos desde 6 prendas surtidas
+      // (queda debajo del precio de cualquier sucursal, que varia +-8%).
+      precio_mayor:
+        diseno.categoria === 'Poleras'
+          ? comoMonto(Math.round(diseno.precio * 0.75))
+          : null,
+      minimo_mayor: 6,
+      categoria_id: idDe(catalogos.categorias, diseno.categoria),
+      coleccion_id: idDe(catalogos.colecciones, diseno.coleccion),
+      temporada_id: idDe(catalogos.temporadas, diseno.temporada),
+      proveedor_id: idDe(catalogos.proveedores, diseno.proveedor),
+    };
+    const modelo =
+      (await repoModelos.findOne({ where: { nombre: diseno.base } })) ??
+      (await repoModelos.save(
+        repoModelos.create({
+          ...comunes,
+          nombre: diseno.base,
+          precio: comoMonto(diseno.precio),
+        }),
+      ));
+    const colorId = idDe(catalogos.colores, diseno.color);
 
-      let producto = await repo.findOne({ where: { nombre } });
+    for (const talla of diseno.tallas) {
+      const nombre = nombreVariante(diseno.base, diseno.color, talla);
+      const tallaId = idDe(catalogos.tallas, talla);
+
+      let producto = await repo.findOne({
+        where: { modelo_id: modelo.id, color_id: colorId, talla_id: tallaId },
+      });
       if (!producto) {
         producto = await repo.save(
           repo.create({
+            ...comunes,
+            modelo_id: modelo.id,
             nombre,
             foto,
             precio: comoMonto(diseno.precio),
-            categoria_id: idDe(catalogos.categorias, diseno.categoria),
-            coleccion_id: idDe(catalogos.colecciones, diseno.coleccion),
-            color_id: idDe(catalogos.colores, diseno.color),
-            talla_id: idDe(catalogos.tallas, talla),
-            temporada_id: idDe(catalogos.temporadas, diseno.temporada),
-            proveedor_id: idDe(catalogos.proveedores, diseno.proveedor),
+            color_id: colorId,
+            talla_id: tallaId,
+            sku: `TMP-${modelo.id}-${tallaId}-${colorId}`,
           }),
         );
+        producto.sku = skuGenerado(producto.id);
+        await repo.save(producto);
       }
 
       productos.push({ id: producto.id, nombre, precio: diseno.precio });
@@ -322,7 +370,7 @@ async function sembrarStock(
       const sucursalId = idDe(sucursales, sucursal);
       // Ajuste de precio por plaza: +-8% sobre el precio de lista.
       const precio =
-        Math.round(producto.precio * (1 + (entero(rng, -8, 8) / 100)) * 100) /
+        Math.round(producto.precio * (1 + entero(rng, -8, 8) / 100) * 100) /
         100;
 
       const existente = await repo.findOne({
@@ -418,7 +466,12 @@ async function sembrarVentas(
     // sale creciente en vez de plana.
     const antiguedad = Math.floor(DIAS_DE_HISTORIA * rng() * rng());
     const fecha = sumarDias(ahora, -antiguedad);
-    fecha.setHours(entero(rng, 9, 20), entero(rng, 0, 59), entero(rng, 0, 59), 0);
+    fecha.setHours(
+      entero(rng, 9, 20),
+      entero(rng, 0, 59),
+      entero(rng, 0, 59),
+      0,
+    );
 
     // Toda la venta sale de una sola sucursal, como en la tienda real.
     const sucursalId = elegir(rng, stock).sucursalId;
@@ -516,7 +569,8 @@ async function sembrarReservas(
 
     const sucursalId = elegir(rng, stock).sucursalId;
     const candidatos = stock.filter(
-      (fila) => fila.sucursalId === sucursalId && fila.cantidad - fila.reservada > 3,
+      (fila) =>
+        fila.sucursalId === sucursalId && fila.cantidad - fila.reservada > 3,
     );
     if (candidatos.length === 0) continue;
 
@@ -581,8 +635,12 @@ async function sembrarBitacora(
 ): Promise<void> {
   const repo = manager.getRepository(Bitacora);
   const encargados = personal.filter((u) => u.tipo === 'trabajador');
-  const registros: { accion: string; actor: Usuario; producto: string | null; fecha: Date }[] =
-    [];
+  const registros: {
+    accion: string;
+    actor: Usuario;
+    producto: string | null;
+    fecha: Date;
+  }[] = [];
 
   for (const venta of ventasSembradas) {
     const actor =

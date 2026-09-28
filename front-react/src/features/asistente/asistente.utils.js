@@ -160,11 +160,10 @@ export function tarjetaDe(catalogo, grupo, variantes, sucursalId) {
 }
 
 /** Tarjeta para un producto que eligió la IA. */
-export function tarjetaDeProducto(catalogo, productoId, sucursalId) {
+/** Tarjeta del producto base completo (todas sus tallas y colores) a partir de una variante. */
+export function tarjetaDeModelo(catalogo, productoId, sucursalId) {
   const grupo = catalogo.grupoPorId(productoId)
-  if (!grupo) return null
-  const variante = grupo.variantes.find((v) => v.id === productoId)
-  return tarjetaDe(catalogo, grupo, variante ? [variante] : grupo.variantes, sucursalId)
+  return grupo ? tarjetaDe(catalogo, grupo, grupo.variantes, sucursalId) : null
 }
 
 /**

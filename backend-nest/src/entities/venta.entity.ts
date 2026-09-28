@@ -1,4 +1,4 @@
-import { Transform } from 'class-transformer';
+import { Exclude, Expose, Transform } from 'class-transformer';
 import {
   Column,
   CreateDateColumn,
@@ -7,13 +7,18 @@ import {
   JoinColumn,
   ManyToOne,
   OneToMany,
+  OneToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import type { Relation } from 'typeorm';
-import { TipoVenta } from '../commons/enums/tipo-venta.enum.js';
+import { MetodoPago } from '../commons/enums/caja.enum.js';
+import { EstadoPago } from '../commons/enums/envio.enum.js';
+import { ModalidadVenta, TipoVenta } from '../commons/enums/tipo-venta.enum.js';
 import { aIsoSinZona } from '../commons/fechas.js';
 import { Comprobante } from './comprobante.entity.js';
 import { DetalleVenta } from './detalle-venta.entity.js';
+import { Envio } from './envio.entity.js';
+import { TurnoCaja } from './turno-caja.entity.js';
 import { Usuario } from './usuario.entity.js';
 
 @Entity('ventas')
@@ -29,6 +34,16 @@ export class Venta {
   })
   tipo_venta: TipoVenta;
 
+  @Index('ix_ventas_modalidad')
+  @Column({
+    name: 'modalidad',
+    type: 'enum',
+    enum: ModalidadVenta,
+    enumName: 'modalidad_venta_enum',
+    default: ModalidadVenta.MENOR,
+  })
+  modalidad: ModalidadVenta;
+
   @Column({
     name: 'total',
     type: 'numeric',
@@ -42,8 +57,58 @@ export class Venta {
   @Column({ name: 'pago_id', type: 'varchar', length: 255, nullable: true })
   pago_id: string | null;
 
+  @Column({
+    name: 'metodo_pago',
+    type: 'enum',
+    enum: MetodoPago,
+    enumName: 'metodo_pago_enum',
+    nullable: true,
+  })
+  metodo_pago: MetodoPago | null;
+
+  /** Una contraentrega queda pendiente hasta que se cobra al entregar. */
+  @Column({
+    name: 'estado_pago',
+    type: 'enum',
+    enum: EstadoPago,
+    enumName: 'estado_pago_enum',
+    default: EstadoPago.PAGADO,
+  })
+  estado_pago: EstadoPago;
+
+  /** Comprobante del pago por QR (clave del archivo privado). No se expone en JSON. */
+  @Exclude()
+  @Column({
+    name: 'comprobante_pago',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  comprobante_pago: string | null;
+
+  /** Si el cliente ya subio el comprobante del pago por QR. */
+  @Expose()
+  get tiene_comprobante(): boolean {
+    return !!this.comprobante_pago;
+  }
+
+  /** Pedido online cancelado: el stock volvio y no cuenta en los reportes. */
+  @Transform(({ value }) => aIsoSinZona(value), { toPlainOnly: true })
+  @Column({ name: 'cancelada_en', type: 'timestamp', nullable: true })
+  cancelada_en: Date | null;
+
   @Column({ name: 'usuario_id', type: 'int' })
   usuario_id: number;
+
+  /** UUID que genera el cliente (POS offline) para que reintentar no duplique la venta. */
+  @Index('ix_ventas_id_cliente', { unique: true })
+  @Column({ name: 'id_cliente', type: 'uuid', nullable: true })
+  id_cliente: string | null;
+
+  /** Turno de caja en que se cobro. Solo las ventas presenciales lo tienen. */
+  @Index('ix_ventas_turno')
+  @Column({ name: 'turno_id', type: 'int', nullable: true })
+  turno_id: number | null;
 
   @Transform(({ value }) => aIsoSinZona(value), { toPlainOnly: true })
   @Index('ix_ventas_creada_en')
@@ -54,6 +119,10 @@ export class Venta {
   @JoinColumn({ name: 'usuario_id' })
   usuario?: Relation<Usuario> | null;
 
+  @ManyToOne(() => TurnoCaja, (turno) => turno.ventas)
+  @JoinColumn({ name: 'turno_id' })
+  turno?: Relation<TurnoCaja> | null;
+
   @OneToMany(() => Comprobante, (comprobante) => comprobante.venta, {
     cascade: true,
   })
@@ -61,4 +130,7 @@ export class Venta {
 
   @OneToMany(() => DetalleVenta, (detalle) => detalle.venta, { cascade: true })
   detalles?: Relation<DetalleVenta>[];
+
+  @OneToOne(() => Envio, (envio) => envio.venta)
+  envio?: Relation<Envio> | null;
 }

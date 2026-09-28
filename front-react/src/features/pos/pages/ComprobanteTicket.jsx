@@ -128,6 +128,7 @@ function Ticket({ id }) {
                       <span className="block text-[11px] text-on-surface-variant">
                         {referencias.nombre('tallas', p?.talla_id)} · {referencias.nombre('colores', p?.color_id)} ·{' '}
                         {monedaBs(d.precio)} c/u
+                        {d.precio_lista && Number(d.precio_lista) > Number(d.precio) && ' (por mayor)'}
                       </span>
                     </td>
                     <td className="py-1 text-right tabular-nums">{monedaBs(+d.precio * d.cantidad)}</td>

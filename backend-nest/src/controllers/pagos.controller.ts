@@ -39,7 +39,10 @@ export class PagosController {
   ) {
     this.pagos.exigirPasarela();
 
-    const total = await this.ventas.totalDe(datos.detalles);
+    const total = await this.ventas.totalDe(
+      datos.detalles,
+      datos.entrega ?? null,
+    );
     return this.pagos.crearIntencion(total, actor);
   }
 }

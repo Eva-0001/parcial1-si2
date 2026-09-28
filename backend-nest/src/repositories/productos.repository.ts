@@ -4,6 +4,7 @@ import { DataSource, Repository } from 'typeorm';
 import { Categoria } from '../entities/categoria.entity.js';
 import { Coleccion } from '../entities/coleccion.entity.js';
 import { Color } from '../entities/color.entity.js';
+import { DetalleMovimientoAlmacen } from '../entities/detalle-movimiento-almacen.entity.js';
 import { DetalleVenta } from '../entities/detalle-venta.entity.js';
 import { Producto } from '../entities/producto.entity.js';
 import { ProductoSucursal } from '../entities/producto-sucursal.entity.js';
@@ -15,6 +16,7 @@ import { Temporada } from '../entities/temporada.entity.js';
 
 export interface FiltroDeProductos {
   nombre?: string;
+  modelo_id?: number;
   categoria_id?: number;
   coleccion_id?: number;
   color_id?: number;
@@ -45,8 +47,14 @@ export class ProductosRepository {
     const consulta = this.productos.createQueryBuilder('producto');
 
     if (filtro.nombre) {
-      consulta.andWhere('producto.nombre ILIKE :nombre', {
-        nombre: `%${filtro.nombre}%`,
+      consulta.andWhere(
+        '(producto.nombre ILIKE :nombre OR producto.sku ILIKE :nombre)',
+        { nombre: `%${filtro.nombre}%` },
+      );
+    }
+    if (filtro.modelo_id !== undefined) {
+      consulta.andWhere('producto.modelo_id = :modeloId', {
+        modeloId: filtro.modelo_id,
       });
     }
     for (const campo of [
@@ -98,8 +106,14 @@ export class ProductosRepository {
     return null;
   }
 
-  tieneStock(id: number): Promise<boolean> {
-    return this.stock.existsBy({ producto_id: id });
+  async tieneStock(id: number): Promise<boolean> {
+    const [enSucursales, enAlmacenes] = await Promise.all([
+      this.stock.existsBy({ producto_id: id }),
+      this.productos.manager
+        .getRepository(DetalleMovimientoAlmacen)
+        .existsBy({ producto_id: id }),
+    ]);
+    return enSucursales || enAlmacenes;
   }
 
   crear(datos: Partial<Producto>): Promise<Producto> {

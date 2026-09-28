@@ -7,8 +7,12 @@ import { useSucursalActivaStore } from '@/core/stores/sucursal-activa.store'
 import { resumenItems } from '@/core/stores/lista-items'
 import { useAuthStore } from '@/core/stores/auth.store'
 import { toast } from '@/core/stores/toast.store'
+import { useColaReservasStore } from '@/core/offline/cola-reservas.store'
+import { nuevoUuid } from '@/core/offline/uuid'
 import { desdeISO, hoyISO } from '@/shared/utils/fechas'
 import { cx } from '@/shared/utils/clases'
+
+const ESPERA_SERVIDOR_MS = 10_000
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
 const DIAS = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
@@ -88,19 +92,58 @@ export default function NuevaReserva() {
     setGuardando(true)
     setErrorGeneral(null)
 
+    const idCliente = nuevoUuid()
+    const payload = {
+      fecha,
+      hora: `${hora}:00`,
+      usuario_id: usuario.id,
+      detalles: borrador.items.map((i) => ({ producto_sucursal_id: i.producto_sucursal_id, cantidad: i.cantidad })),
+    }
+
+    // Sin conexión la reserva queda en espera en este equipo y se envía sola al volver la red.
+    const dejarEnEspera = () =>
+      useColaReservasStore
+        .getState()
+        .encolar({
+          id_cliente: idCliente,
+          usuario_id: usuario.id,
+          creada_en: new Date().toISOString(),
+          payload,
+          resumen: {
+            fecha,
+            hora,
+            sucursal: sucursalElegida?.nombre ?? null,
+            items: borrador.items.map((i) => ({
+              nombre: i.nombre,
+              talla: i.talla,
+              color: i.color,
+              cantidad: i.cantidad,
+            })),
+          },
+        })
+        .then(() => {
+          borrador.vaciar()
+          toast.info('Sin conexión: tu reserva quedó en espera y se enviará sola cuando vuelva la conexión.')
+          navigate('/reservas')
+        })
+        .catch(() => {
+          setGuardando(false)
+          setErrorGeneral('No hay conexión y este navegador no permite guardar la reserva. Inténtalo cuando vuelva la red.')
+        })
+
+    // Siempre se intenta enviar; si el servidor no responde en 10 s queda en espera.
     reservasService
-      .crear({
-        fecha,
-        hora: `${hora}:00`,
-        usuario_id: usuario.id,
-        detalles: borrador.items.map((i) => ({ producto_sucursal_id: i.producto_sucursal_id, cantidad: i.cantidad })),
-      })
+      .crear({ ...payload, id_cliente: idCliente }, { timeout: ESPERA_SERVIDOR_MS })
       .then(() => {
         borrador.vaciar()
         toast.exito('Reserva confirmada. Te esperamos en la sucursal.')
         navigate('/reservas')
       })
       .catch((e) => {
+        if (e.status === 0) {
+          dejarEnEspera()
+          return
+        }
         setGuardando(false)
         setErrorGeneral(e.status === 409 ? `${e.message}. Ajusta las cantidades.` : e.message)
       })

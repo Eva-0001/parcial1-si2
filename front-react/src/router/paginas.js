@@ -13,6 +13,8 @@ export const Checkout = lazy(() => import('@/features/checkout/pages/Checkout'))
 export const CompraExitosa = lazy(() => import('@/features/checkout/pages/CompraExitosa'))
 export const MisPedidos = lazy(() => import('@/features/pedidos/pages/MisPedidos'))
 export const DetallePedido = lazy(() => import('@/features/pedidos/pages/DetallePedido'))
+export const PedidosOnline = lazy(() => import('@/features/pedidos/pages/PedidosOnline'))
+export const PedidoOnlineDetalle = lazy(() => import('@/features/pedidos/pages/PedidoOnlineDetalle'))
 export const MisReservas = lazy(() => import('@/features/reservas/pages/MisReservas'))
 export const NuevaReserva = lazy(() => import('@/features/reservas/pages/NuevaReserva'))
 export const MiPerfil = lazy(() => import('@/features/perfil/pages/MiPerfil'))
@@ -29,7 +31,7 @@ export const SucursalForm = lazy(() => import('@/features/sucursales/pages/Sucur
 
 export const ProductosAdmin = lazy(() => import('@/features/productos/pages/ProductosAdmin'))
 export const MisProductos = lazy(() => import('@/features/productos/pages/MisProductos'))
-export const ProductoForm = lazy(() => import('@/features/productos/pages/ProductoForm'))
+export const ModeloForm = lazy(() => import('@/features/productos/pages/ModeloForm'))
 export const InventarioGlobal = lazy(() => import('@/features/inventario/pages/InventarioGlobal'))
 export const StockSucursal = lazy(() => import('@/features/inventario/pages/StockSucursal'))
 
@@ -42,7 +44,15 @@ export const VentasSucursal = lazy(() => import('@/features/ventas/pages/VentasS
 export const Comprobantes = lazy(() => import('@/features/ventas/pages/Comprobantes'))
 
 export const PuntoVenta = lazy(() => import('@/features/pos/pages/PuntoVenta'))
+export const MiCaja = lazy(() => import('@/features/caja/pages/MiCaja'))
+export const Turnos = lazy(() => import('@/features/caja/pages/Turnos'))
+export const TurnoDetalle = lazy(() => import('@/features/caja/pages/TurnoDetalle'))
+
+export const Almacenes = lazy(() => import('@/features/almacenes/pages/Almacenes'))
+export const AlmacenDetalle = lazy(() => import('@/features/almacenes/pages/AlmacenDetalle'))
 export const ComprobanteTicket = lazy(() => import('@/features/pos/pages/ComprobanteTicket'))
+export const TicketLocal = lazy(() => import('@/features/pos/pages/TicketLocal'))
+export const Sincronizacion = lazy(() => import('@/features/sincronizacion/pages/Sincronizacion'))
 
 export const Tablero = lazy(() => import('@/features/tablero/pages/Tablero'))
 export const Bitacora = lazy(() => import('@/features/bitacora/pages/Bitacora'))

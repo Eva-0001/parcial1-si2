@@ -4,9 +4,11 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
+import { ComoMonto } from '../commons/pipes.js';
 
 export class CrearCategoriaDto {
   @IsString()
@@ -85,6 +87,15 @@ export class CrearCiudadDto {
   @IsNotEmpty()
   @MaxLength(100)
   nombre: string;
+
+  /** Tarifa de envio a domicilio. null deja la ciudad sin cobertura de envios. */
+  @IsOptional()
+  @ComoMonto()
+  @Matches(/^\d{1,8}(\.\d{1,2})?$/, {
+    message:
+      'costo_envio debe ser un monto positivo con hasta 2 decimales, por ejemplo "20.00"',
+  })
+  costo_envio?: string | null;
 }
 
 export class ActualizarCiudadDto extends PartialType(CrearCiudadDto) {}

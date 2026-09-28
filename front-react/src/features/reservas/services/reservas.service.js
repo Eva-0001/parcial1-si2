@@ -17,8 +17,8 @@ export const reservasService = {
     return Promise.all(ids.map((id) => this.obtener(id)))
   },
 
-  crear(datos) {
-    return http.post('/reservas', datos)
+  crear(datos, opciones = {}) {
+    return http.post('/reservas', datos, opciones)
   },
 
   actualizar(id, datos) {

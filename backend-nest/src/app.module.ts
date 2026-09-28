@@ -11,8 +11,10 @@ import { RolesGuard } from './commons/guards/roles.guard.js';
 import { configuracion, type Configuracion } from './config/configuracion.js';
 import { opcionesDeDataSource } from './config/data-source.js';
 import { Usuario } from './entities/usuario.entity.js';
+import { AlmacenesModule } from './module/almacenes.module.js';
 import { AuthModule } from './module/auth.module.js';
 import { BitacoraModule } from './module/bitacora.module.js';
+import { CajaModule } from './module/caja.module.js';
 import { CatalogosModule } from './module/catalogos.module.js';
 import { IaModule } from './module/ia.module.js';
 import { ProductosModule } from './module/productos.module.js';
@@ -64,7 +66,9 @@ import { VentasModule } from './module/ventas.module.js';
     CatalogosModule,
     ProductosModule,
     VentasModule,
+    CajaModule,
     ReservasModule,
+    AlmacenesModule,
     BitacoraModule,
     ReportesModule,
     IaModule,

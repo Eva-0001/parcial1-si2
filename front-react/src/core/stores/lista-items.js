@@ -1,3 +1,5 @@
+import { aplicarPrecios, faltanParaMayor } from '@/shared/utils/precios'
+
 export function leerItems(clave) {
   try {
     const raw = localStorage.getItem(clave)
@@ -60,7 +62,23 @@ export function accionesItems(set, get) {
 
 export function resumenItems(items) {
   const cantidadTotal = items.reduce((acc, i) => acc + i.cantidad, 0)
-  const subtotal = items.reduce((acc, i) => acc + i.precio * i.cantidad, 0)
+
+  // Precio por mayor surtido. Los items guardados antes de existir el precio por mayor
+  // no traen esos campos y quedan por menor.
+  const aLineas = items.map((i) => ({
+    clave: i.producto_sucursal_id,
+    cantidad: i.cantidad,
+    precio: i.precio,
+    precio_mayor: i.precio_mayor ?? null,
+    minimo_mayor: i.minimo_mayor,
+  }))
+  const precios = aplicarPrecios(aLineas)
+  const lineas = items.map((i) => {
+    const p = precios.get(i.producto_sucursal_id)
+    return { ...i, precio_aplicado: p.precio, por_mayor: p.por_mayor }
+  })
+  const subtotal = lineas.reduce((acc, i) => acc + i.precio_aplicado * i.cantidad, 0)
+  const subtotalLista = items.reduce((acc, i) => acc + i.precio * i.cantidad, 0)
 
   const vistas = new Map()
   for (const i of items) vistas.set(i.sucursal_id, i.sucursal)
@@ -68,7 +86,11 @@ export function resumenItems(items) {
 
   return {
     cantidadTotal,
+    lineas,
     subtotal,
+    ahorroMayor: subtotalLista - subtotal,
+    porMayor: lineas.some((i) => i.por_mayor),
+    faltanParaMayor: faltanParaMayor(aLineas),
     sucursales,
     mezclado: sucursales.length > 1,
     sucursal: sucursales.length === 1 ? sucursales[0] : null,

@@ -63,7 +63,19 @@ export default function CompraExitosa() {
         </div>
         <h1 className="mt-4 text-2xl font-semibold text-on-surface">¡Gracias por tu compra!</h1>
         <p className="mt-1 text-sm text-on-surface-variant">
-          Tu pedido quedó registrado. Retíralo en la sucursal cuando quieras.
+          {v.metodo_pago === 'qr' && v.estado_pago === 'pendiente'
+            ? v.tiene_comprobante
+              ? 'Recibimos tu pedido y tu comprobante. Un encargado lo revisará y, al aprobarlo, tu compra queda confirmada.'
+              : 'Recibimos tu pedido. Sube el comprobante de tu pago QR desde "Seguir mi pedido" para que podamos confirmarlo.'
+            : v.envio?.modalidad === 'domicilio'
+              ? v.metodo_pago === 'contraentrega'
+                ? `Lo llevamos a ${v.envio.direccion}. Pagas ${monedaBs(v.total)} en efectivo al recibirlo.`
+                : `Lo llevamos a ${v.envio.direccion}. Te avisamos cuando salga con el repartidor.`
+              : v.tipo_venta === 'virtual'
+                ? v.metodo_pago === 'contraentrega'
+                  ? `Tu pedido quedó registrado. Pagas ${monedaBs(v.total)} en efectivo al retirarlo; te avisamos cuando esté listo.`
+                  : 'Tu pedido quedó registrado. Te avisamos cuando esté listo para retirar.'
+                : 'Venta registrada.'}
         </p>
 
         <dl className="mt-6 grid grid-cols-3 gap-3 text-center">
@@ -76,8 +88,14 @@ export default function CompraExitosa() {
             <dd className="mt-0.5 text-base font-bold text-on-surface">{monedaBs(v.total)}</dd>
           </div>
           <div className="rounded-lg bg-surface-container-low p-3">
-            <dt className="text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant">Retiro</dt>
-            <dd className="mt-0.5 truncate text-sm font-bold text-on-surface">{sucursal?.nombre ?? '—'}</dd>
+            <dt className="text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant">
+              {v.envio?.modalidad === 'domicilio' ? 'Envío' : 'Retiro'}
+            </dt>
+            <dd className="mt-0.5 truncate text-sm font-bold text-on-surface">
+              {v.envio?.modalidad === 'domicilio'
+                ? (v.envio.ciudad?.nombre ?? 'A domicilio')
+                : (sucursal?.nombre ?? '—')}
+            </dd>
           </div>
         </dl>
 
@@ -115,8 +133,11 @@ export default function CompraExitosa() {
             Seguir comprando
           </Link>
         </div>
-        <Link to="/pedidos" className="no-imprimir mt-4 block text-xs font-semibold text-primary hover:underline">
-          Ver mis pedidos
+        <Link
+          to={`/pedidos/${v.id}`}
+          className="no-imprimir mt-4 block text-xs font-semibold text-primary hover:underline"
+        >
+          Seguir mi pedido
         </Link>
       </div>
     )

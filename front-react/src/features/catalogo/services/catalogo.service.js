@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { productosService } from '@/features/productos/services/productos.service'
+import { modelosService } from '@/features/productos/services/modelos.service'
 import { stockService } from '@/features/inventario/services/stock.service'
 import { useReferenciasStore } from '@/core/stores/referencias.store'
 import { useSucursalActivaStore } from '@/core/stores/sucursal-activa.store'
@@ -11,6 +12,7 @@ export function claveDe(nombre) {
 export const useCatalogoStore = create(() => ({
   productos: [],
   stock: [],
+  modelos: [],
 }))
 
 let cargado = false
@@ -28,10 +30,11 @@ export const catalogoService = {
     enCurso = Promise.all([
       productosService.listar(),
       stockService.listar(),
+      modelosService.listar(),
       useReferenciasStore.getState().cargar(),
     ])
-      .then(([productos, stock]) => {
-        useCatalogoStore.setState({ productos, stock })
+      .then(([productos, stock, modelos]) => {
+        useCatalogoStore.setState({ productos, stock, modelos })
         cargado = true
         enCurso = null
       })
@@ -72,24 +75,30 @@ function stockPorProductoDe(stock) {
 let ultimasEntradas = null
 let ultimosGrupos = []
 
-function gruposDe(productos, stock, sucursalId) {
+// Un grupo del catálogo es un producto base (modelo) con sus variantes talla x color.
+function gruposDe(productos, stock, sucursalId, modelos) {
   const e = ultimasEntradas
-  if (e && e.productos === productos && e.stock === stock && e.sucursalId === sucursalId) return ultimosGrupos
+  if (e && e.productos === productos && e.stock === stock && e.sucursalId === sucursalId && e.modelos === modelos) {
+    return ultimosGrupos
+  }
 
   const porProducto = stockPorProductoDe(stock)
+  const modeloPorId = new Map(modelos.map((m) => [m.id, m]))
   const porClave = new Map()
   for (const p of productos) {
-    const clave = claveDe(p.nombre)
+    const clave = p.modelo_id != null ? `m${p.modelo_id}` : claveDe(p.nombre)
     const lista = porClave.get(clave)
     if (lista) lista.push(p)
     else porClave.set(clave, [p])
   }
-  ultimosGrupos = [...porClave.entries()].map(([clave, variantes]) => armarGrupo(clave, variantes, sucursalId, porProducto))
-  ultimasEntradas = { productos, stock, sucursalId }
+  ultimosGrupos = [...porClave.entries()].map(([clave, variantes]) =>
+    armarGrupo(clave, variantes, sucursalId, porProducto, modeloPorId.get(variantes[0].modelo_id)),
+  )
+  ultimasEntradas = { productos, stock, sucursalId, modelos }
   return ultimosGrupos
 }
 
-function armarGrupo(clave, variantes, sucursalId, porProducto) {
+function armarGrupo(clave, variantes, sucursalId, porProducto, modelo) {
   const ordenadas = [...variantes].sort((a, b) => a.id - b.id)
   const conFoto = ordenadas.find((v) => v.foto)
   const rep = conFoto ?? ordenadas[0]
@@ -118,7 +127,9 @@ function armarGrupo(clave, variantes, sucursalId, porProducto) {
 
   return {
     clave,
-    nombre: rep.nombre,
+    nombre: modelo?.nombre ?? rep.nombre,
+    descripcion: modelo?.descripcion ?? null,
+    modelo_id: modelo?.id ?? null,
     id: rep.id,
     variantes: ordenadas,
     foto: productosService.urlFoto(rep),
@@ -134,8 +145,8 @@ function armarGrupo(clave, variantes, sucursalId, porProducto) {
   }
 }
 
-function vistaCatalogo(productos, stock, sucursalId) {
-  const grupos = gruposDe(productos, stock, sucursalId)
+function vistaCatalogo(productos, stock, sucursalId, modelos) {
+  const grupos = gruposDe(productos, stock, sucursalId, modelos)
   const stockPorProducto = stockPorProductoDe(stock)
   return {
     productos,
@@ -154,11 +165,12 @@ function vistaCatalogo(productos, stock, sucursalId) {
 export function useCatalogo() {
   const productos = useCatalogoStore((s) => s.productos)
   const stock = useCatalogoStore((s) => s.stock)
+  const modelos = useCatalogoStore((s) => s.modelos)
   const sucursalId = useSucursalActivaStore((s) => s.sucursal?.id ?? null)
-  return vistaCatalogo(productos, stock, sucursalId)
+  return vistaCatalogo(productos, stock, sucursalId, modelos)
 }
 
 export function catalogoActual() {
-  const { productos, stock } = useCatalogoStore.getState()
-  return vistaCatalogo(productos, stock, useSucursalActivaStore.getState().sucursal?.id ?? null)
+  const { productos, stock, modelos } = useCatalogoStore.getState()
+  return vistaCatalogo(productos, stock, useSucursalActivaStore.getState().sucursal?.id ?? null, modelos)
 }

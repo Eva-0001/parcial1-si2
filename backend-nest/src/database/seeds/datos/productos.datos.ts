@@ -118,8 +118,7 @@ export const DISENOS: readonly DatosDiseno[] = [
   },
   {
     base: 'Polera Troy Lee Designs GP Pro',
-    archivo:
-      'troy-lee-designs-polera-gp-pro-stamp-black-sm-3491903_large.webp',
+    archivo: 'troy-lee-designs-polera-gp-pro-stamp-black-sm-3491903_large.webp',
     categoria: 'Poleras',
     coleccion: 'Deportiva Pro',
     color: 'Negro',

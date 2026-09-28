@@ -14,6 +14,9 @@ import {
 import { cargarReferencias, useReferencias } from '@/core/stores/referencias.store'
 import { productosService } from '@/features/productos/services/productos.service'
 import { toast } from '@/core/stores/toast.store'
+import { useAuth } from '@/core/stores/auth.store'
+import { describirReserva, useColaReservasStore, useReservasEnCola } from '@/core/offline/cola-reservas.store'
+import { useConexionStore } from '@/core/offline/conexion.store'
 import Skeleton from '@/shared/components/Skeleton'
 import EstadoVacio from '@/shared/components/EstadoVacio'
 import ModalConfirmacion from '@/shared/components/ModalConfirmacion'
@@ -25,8 +28,86 @@ const foto = (d) => {
   return p ? productosService.urlFoto(p) : null
 }
 
+/** Reservas hechas sin conexión que todavía no llegaron al servidor. */
+function ReservasEnEspera() {
+  const auth = useAuth()
+  const enCola = useReservasEnCola(auth.usuario?.id)
+  const enLinea = useConexionStore((s) => s.enLinea)
+  const sincronizando = useColaReservasStore((s) => s.sincronizando)
+  const reintentar = useColaReservasStore((s) => s.reintentar)
+  const descartar = useColaReservasStore((s) => s.descartar)
+
+  if (enCola.length === 0) return null
+
+  return (
+    <section className="mb-6 space-y-3" aria-live="polite">
+      {enCola.map((r) => {
+        const conError = r.estado === 'error'
+        const unidades = r.resumen.items.reduce((acc, i) => acc + i.cantidad, 0)
+        return (
+          <div
+            key={r.id_cliente}
+            className={cx(
+              'flex flex-col gap-3 rounded-xl border p-4 md:flex-row md:items-center',
+              conError ? 'border-error/40 bg-error/5' : 'border-amber-300 bg-amber-50',
+            )}
+          >
+            <span
+              className={cx(
+                'material-symbols-outlined text-[28px]',
+                conError ? 'text-error' : 'text-amber-600',
+                !conError && sincronizando && 'animate-spin',
+              )}
+            >
+              {conError ? 'error' : sincronizando ? 'progress_activity' : 'schedule_send'}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-on-surface">
+                {conError
+                  ? 'No pudimos registrar esta reserva'
+                  : sincronizando
+                    ? 'Enviando tu reserva...'
+                    : 'Reserva en espera de conexión'}
+              </p>
+              <p className="text-sm text-on-surface-variant">
+                {describirReserva(r.resumen)} · {unidades} {unidades === 1 ? 'prenda' : 'prendas'}
+              </p>
+              <p className="mt-1 text-xs text-on-surface-variant">
+                {conError
+                  ? r.error
+                  : enLinea
+                    ? 'Ya hay conexión: se está enviando al servidor.'
+                    : 'Está guardada en este equipo y se enviará sola cuando vuelva la conexión. Te avisaremos al confirmarse.'}
+              </p>
+            </div>
+            {conError && (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn-secundario py-1.5"
+                  disabled={!enLinea}
+                  onClick={() => reintentar(r.id_cliente)}
+                >
+                  Reintentar
+                </button>
+                <button type="button" className="btn-icono-peligro" title="Descartar" onClick={() => descartar(r.id_cliente)}>
+                  <span className="material-symbols-outlined text-[20px]">delete</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
 export default function MisReservas() {
   const referencias = useReferencias()
+  // Cada vez que una reserva en espera llega al servidor, se vuelve a pedir la lista.
+  const confirmadas = useColaReservasStore((s) => s.confirmadas)
+  const enLinea = useConexionStore((s) => s.enLinea)
+  const [sinConexion, setSinConexion] = useState(false)
 
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState(null)
@@ -44,10 +125,13 @@ export default function MisReservas() {
       .then((lista) => reservasService.obtenerVarias(lista.map((r) => r.id)))
       .then((detalles) => {
         setReservas(detalles)
+        setError(null)
+        setSinConexion(false)
         setCargando(false)
       })
       .catch((e) => {
         setError(e.message)
+        setSinConexion(e.status === 0)
         setCargando(false)
       })
   }, [])
@@ -55,7 +139,12 @@ export default function MisReservas() {
   useEffect(() => {
     cargarReferencias().catch(() => {})
     pedir()
-  }, [pedir])
+  }, [pedir, confirmadas])
+
+  // Al volver la conexión, la lista se recarga sola.
+  useEffect(() => {
+    if (enLinea && sinConexion) pedir()
+  }, [enLinea, sinConexion, pedir])
 
   const cargar = () => {
     setCargando(true)
@@ -105,6 +194,17 @@ export default function MisReservas() {
   let contenido
   if (cargando) {
     contenido = <Skeleton tipo="tabla" cantidad={3} />
+  } else if (error && sinConexion) {
+    contenido = (
+      <div className="tarjeta flex flex-col items-center py-12 text-center">
+        <span className="material-symbols-outlined text-[40px] text-on-surface-variant">cloud_off</span>
+        <h3 className="mt-2 text-lg font-semibold text-on-surface">Estás sin conexión</h3>
+        <p className="max-w-md text-sm text-on-surface-variant">
+          Tus reservas confirmadas se mostrarán cuando vuelva la conexión. Mientras tanto puedes hacer reservas nuevas:
+          quedarán en espera y se enviarán solas.
+        </p>
+      </div>
+    )
   } else if (error) {
     contenido = (
       <div className="tarjeta flex flex-col items-center py-16 text-center">
@@ -252,6 +352,8 @@ export default function MisReservas() {
           <span className="material-symbols-outlined text-[18px]">add</span> Nueva reserva
         </Link>
       </div>
+
+      <ReservasEnEspera />
 
       <nav className="mb-6 flex gap-6 border-b border-outline-variant" role="tablist">
         <button type="button" role="tab" className={clasePestana(pestana === 'proximas')} onClick={() => setPestana('proximas')}>

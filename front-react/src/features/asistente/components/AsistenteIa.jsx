@@ -8,13 +8,13 @@ import { monedaBs } from '@/shared/utils/moneda-bs'
 import { crearReconocimiento } from '@/shared/utils/voz'
 import { cx } from '@/shared/utils/clases'
 import { useSucursalActivaStore } from '@/core/stores/sucursal-activa.store'
-import { buscarPrendas, tarjetaDeProducto } from '../asistente.utils'
+import { buscarPrendas, tarjetaDeModelo } from '../asistente.utils'
 import { asistenteService } from '../services/asistente.service'
 
 const MENSAJE_INICIAL = {
   de: 'bot',
   texto:
-    '¡Hola! Soy el asistente de FashionStore. Cuéntame qué buscas: prenda, color, talla, categoría, temporada o tu presupuesto (por ejemplo "chaqueta negra hasta 200 Bs").',
+    '¡Hola! Soy el asistente de FashionStore. Cuéntame qué buscas (por ejemplo "chaqueta negra hasta 200 Bs") o pregúntame por envíos, formas de pago, sucursales, promociones o precios por mayor.',
 }
 
 let iaHabilitada = null
@@ -51,11 +51,23 @@ function respuestaLocal(texto, catalogo, sucursalId, aviso = '') {
   }
 }
 
+const MAX_HISTORIAL = 10
+
+/** Últimos mensajes del chat para que la IA entienda seguimientos ("¿y en azul?", "la segunda"). */
+function historialDe(mensajes) {
+  return mensajes.slice(-MAX_HISTORIAL).map((m) => {
+    const sugeridas = m.productos?.length
+      ? ` [Prendas sugeridas: ${m.productos.map((p, i) => `${i + 1}) ${p.nombre}`).join('; ')}]`
+      : ''
+    return { rol: m.de === 'usuario' ? 'cliente' : 'asistente', texto: `${m.texto}${sugeridas}`.slice(0, 1500) }
+  })
+}
+
 /**
  * Las recomendaciones las decide Gemini. La búsqueda en el catálogo solo se usa si no hay
  * sesión, si la IA no está configurada o si Gemini falla.
  */
-async function responder(texto) {
+async function responder(texto, anteriores = []) {
   const catalogo = catalogoActual()
   const sucursalId = useSucursalActivaStore.getState().sucursal?.id ?? null
 
@@ -65,17 +77,17 @@ async function responder(texto) {
   if (!(await iaDisponible())) return respuestaLocal(texto, catalogo, sucursalId)
 
   try {
-    const r = await asistenteService.consultar(texto, sucursalId)
+    const r = await asistenteService.consultar(texto, sucursalId, historialDe(anteriores))
     const productos = r.productos
       .map((p) => {
-        const tarjeta = tarjetaDeProducto(catalogo, p.producto_id, sucursalId)
+        const tarjeta = tarjetaDeModelo(catalogo, p.producto_id, sucursalId)
         return tarjeta && { ...tarjeta, motivo: p.motivo }
       })
       .filter(Boolean)
     return {
       de: 'bot',
       ia: true,
-      texto: r.respuesta || (productos.length ? 'Te sugiero estas prendas:' : 'No encontré prendas para eso.'),
+      texto: r.respuesta || (productos.length ? 'Te sugiero estas prendas:' : 'No encontré una respuesta para eso.'),
       productos,
     }
   } catch (e) {
@@ -103,12 +115,13 @@ export default function AsistenteIa() {
     const limpio = entrada.trim()
     if (!limpio || escribiendo) return
     setTexto('')
+    const anteriores = mensajes
     setMensajes((m) => [...m, { de: 'usuario', texto: limpio }])
     setEscribiendo(true)
 
     catalogoService
       .cargar()
-      .then(() => responder(limpio))
+      .then(() => responder(limpio, anteriores))
       .catch(() => ({ de: 'bot', texto: 'No pude cargar el catálogo. Revisa tu conexión e intenta de nuevo.' }))
       .then((respuesta) => {
         setMensajes((m) => [...m, respuesta])
@@ -175,7 +188,7 @@ export default function AsistenteIa() {
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-on-surface">Asistente FashionStore</p>
-              <p className="text-[11px] text-on-surface-variant">Busca por prenda, color, talla, categoría, colección o temporada</p>
+              <p className="text-[11px] text-on-surface-variant">Prendas, envíos, pagos, sucursales y promociones</p>
             </div>
             <button type="button" className="btn-icono" onClick={alternar} aria-label="Cerrar">
               <span className="material-symbols-outlined">close</span>

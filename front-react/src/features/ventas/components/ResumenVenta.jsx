@@ -2,8 +2,10 @@ import { useEffect } from 'react'
 import { cargarReferencias, useReferencias } from '@/core/stores/referencias.store'
 import { productosService } from '@/features/productos/services/productos.service'
 import { sucursalDeVenta, unidadesDeVenta } from '../ventas.utils'
+import { ETIQUETA_METODO_PAGO, estadoDePago } from '@/features/pedidos/envios.utils'
 import { monedaBs } from '@/shared/utils/moneda-bs'
 import { formatoFecha } from '@/shared/utils/formato'
+import { cx } from '@/shared/utils/clases'
 
 export default function ResumenVenta({ venta, fecha = null }) {
   const referencias = useReferencias()
@@ -14,6 +16,9 @@ export default function ResumenVenta({ venta, fecha = null }) {
 
   const sucursal = sucursalDeVenta(venta)
   const unidades = unidadesDeVenta(venta)
+  const envio = venta.envio ?? null
+  const costoEnvio = Number(envio?.costo ?? 0)
+  const estadoPago = estadoDePago(venta)
 
   const foto = (d) => {
     const p = d.producto_sucursal?.producto
@@ -58,13 +63,30 @@ export default function ResumenVenta({ venta, fecha = null }) {
                     </div>
                   </td>
                   <td className="text-center tabular-nums">{d.cantidad}</td>
-                  <td className="text-right tabular-nums">{monedaBs(d.precio)}</td>
+                  <td className="text-right tabular-nums">
+                    {d.precio_lista && Number(d.precio_lista) > Number(d.precio) ? (
+                      <>
+                        <span className="block text-xs text-on-surface-variant line-through">{monedaBs(d.precio_lista)}</span>
+                        <span className="font-semibold text-success">{monedaBs(d.precio)}</span>
+                      </>
+                    ) : (
+                      monedaBs(d.precio)
+                    )}
+                  </td>
                   <td className="text-right font-semibold tabular-nums">{monedaBs(Number(d.precio) * d.cantidad)}</td>
                 </tr>
               )
             })}
           </tbody>
           <tfoot>
+            {costoEnvio > 0 && (
+              <tr>
+                <td colSpan={3} className="px-6 py-2 text-right text-sm text-on-surface-variant">
+                  Envío a domicilio
+                </td>
+                <td className="px-6 py-2 text-right text-sm tabular-nums">{monedaBs(costoEnvio)}</td>
+              </tr>
+            )}
             <tr className="bg-surface-container-low">
               <td colSpan={3} className="px-6 py-3 text-right text-sm font-semibold text-on-surface-variant">
                 Total ({unidades} {unidades === 1 ? 'unidad' : 'unidades'})
@@ -79,7 +101,7 @@ export default function ResumenVenta({ venta, fecha = null }) {
         <div className="tarjeta">
           <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-on-surface">
             <span className="material-symbols-outlined text-[20px] text-primary">store</span>
-            Sucursal de retiro
+            {envio?.modalidad === 'domicilio' ? 'Despacha desde' : 'Sucursal'}
           </h3>
           {sucursal ? (
             <>
@@ -92,12 +114,34 @@ export default function ResumenVenta({ venta, fecha = null }) {
           <dl className="mt-4 space-y-1.5 border-t border-outline-variant pt-3 text-sm">
             <div className="flex justify-between">
               <dt className="text-on-surface-variant">Tipo</dt>
-              <dd className="font-medium capitalize">{venta.tipo_venta}</dd>
+              <dd className="font-medium capitalize">
+                {venta.tipo_venta}
+                {venta.modalidad === 'mayor' && ' · por mayor'}
+              </dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-on-surface-variant">Fecha</dt>
               <dd className="font-medium">{fecha ? formatoFecha(fecha, 'dd/MM/yyyy HH:mm') : 'No registrada'}</dd>
             </div>
+            {venta.metodo_pago && (
+              <div className="flex justify-between">
+                <dt className="text-on-surface-variant">Pago</dt>
+                <dd className="flex items-center gap-2 font-medium">
+                  {ETIQUETA_METODO_PAGO[venta.metodo_pago]}
+                  {estadoPago && (
+                    <span className={cx('rounded-full px-2 py-0.5 text-[11px] font-semibold', estadoPago.chip)}>
+                      {estadoPago.etiqueta}
+                    </span>
+                  )}
+                </dd>
+              </div>
+            )}
+            {venta.cancelada_en && (
+              <div className="flex justify-between">
+                <dt className="text-on-surface-variant">Cancelada</dt>
+                <dd className="font-medium text-error">{formatoFecha(venta.cancelada_en, 'dd/MM/yyyy HH:mm')}</dd>
+              </div>
+            )}
             {venta.usuario && (
               <div className="flex justify-between">
                 <dt className="text-on-surface-variant">Cliente</dt>

@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import ModalCobro from '../components/ModalCobro'
+import ModalAbrirTurno from '@/features/caja/components/ModalAbrirTurno'
+import { cajaService } from '@/features/caja/services/caja.service'
+import { emitirTicket } from '../services/cobro.service'
+import { unidadesEnColaPorStock, useColaVentasStore, useVentasEnCola } from '@/core/offline/cola-ventas.store'
+import { useConexionStore } from '@/core/offline/conexion.store'
+import { nuevoUuid } from '@/core/offline/uuid'
+import { numeroTurno } from '@/features/caja/caja.utils'
 import { stockService } from '@/features/inventario/services/stock.service'
 import { sucursalesService } from '@/features/sucursales/services/sucursales.service'
 import { ventasService } from '@/features/ventas/services/ventas.service'
-import { comprobantesService } from '@/features/ventas/services/comprobantes.service'
 import { productosService } from '@/features/productos/services/productos.service'
 import { useSucursalActivaStore } from '@/core/stores/sucursal-activa.store'
 import { cargarReferencias, useReferencias } from '@/core/stores/referencias.store'
@@ -15,6 +21,9 @@ import ModalConfirmacion from '@/shared/components/ModalConfirmacion'
 import { useAutofocus } from '@/shared/hooks/useAutofocus'
 import { monedaBs } from '@/shared/utils/moneda-bs'
 import { cx } from '@/shared/utils/clases'
+import { aplicarPrecios, faltanParaMayor } from '@/shared/utils/precios'
+
+const ESPERA_SERVIDOR_MS = 10_000
 
 const claseChip = (activo) =>
   cx(
@@ -36,6 +45,14 @@ export default function PuntoVenta() {
   const [error, setError] = useState(null)
   const [sucursales, setSucursales] = useState([])
   const [stock, setStock] = useState([])
+  const [turno, setTurno] = useState(null)
+  const [turnoSinConexion, setTurnoSinConexion] = useState(false)
+  const enLinea = useConexionStore((s) => s.enLinea)
+  const enCola = useVentasEnCola(authActual().usuario?.id)
+  const vendidoSinSincronizar = unidadesEnColaPorStock(enCola)
+  // Stock que queda descontando lo vendido sin conexión y aún no enviado.
+  const existencias = (s) => s.cantidad - (vendidoSinSincronizar.get(s.id) ?? 0)
+  const [abriendoTurno, setAbriendoTurno] = useState(false)
 
   const cargando = sucursalId ? cargandoStock : false
 
@@ -54,6 +71,7 @@ export default function PuntoVenta() {
       if (!texto) return true
       return (
         p.nombre.toLowerCase().includes(texto) ||
+        (p.sku ?? '').toLowerCase() === texto ||
         String(p.id) === texto.replace('#', '') ||
         (referencias.nombre('tallas', p.talla_id) ?? '').toLowerCase() === texto ||
         (referencias.nombre('colores', p.color_id) ?? '').toLowerCase().includes(texto)
@@ -61,12 +79,32 @@ export default function PuntoVenta() {
     })
     .sort(
       (a, b) =>
-        Number(b.cantidad > 0) - Number(a.cantidad > 0) ||
+        Number(existencias(b) > 0) - Number(existencias(a) > 0) ||
         (a.producto?.nombre ?? '').localeCompare(b.producto?.nombre ?? '', 'es'),
     )
 
   const [ticket, setTicket] = useState([])
-  const subtotal = ticket.reduce((acc, i) => acc + Number(i.stock.precio) * i.cantidad, 0)
+  // Precio por mayor surtido: se recalcula con cada cambio del ticket (el backend cobra igual).
+  const precios = aplicarPrecios(
+    ticket.map((i) => ({
+      clave: i.stock.id,
+      cantidad: i.cantidad,
+      precio: i.stock.precio,
+      precio_mayor: i.stock.producto?.precio_mayor ?? null,
+      minimo_mayor: i.stock.producto?.minimo_mayor,
+    })),
+  )
+  const precioDe = (i) => precios.get(i.stock.id)?.precio ?? Number(i.stock.precio)
+  const porMayor = (i) => precios.get(i.stock.id)?.por_mayor ?? false
+  const subtotal = ticket.reduce((acc, i) => acc + precioDe(i) * i.cantidad, 0)
+  const subtotalLista = ticket.reduce((acc, i) => acc + Number(i.stock.precio) * i.cantidad, 0)
+  const faltan = faltanParaMayor(
+    ticket.map((i) => ({
+      cantidad: i.cantidad,
+      precio_mayor: i.stock.producto?.precio_mayor ?? null,
+      minimo_mayor: i.stock.producto?.minimo_mayor,
+    })),
+  )
   const total = subtotal
   const unidades = ticket.reduce((acc, i) => acc + i.cantidad, 0)
 
@@ -77,11 +115,19 @@ export default function PuntoVenta() {
   const [errorCobro, setErrorCobro] = useState(null)
 
   useEffect(() => {
-    Promise.all([sucursalesService.listar(), cargarReferencias()])
-      .then(([lista]) => {
+    Promise.all([sucursalesService.listar(), cajaService.turnoActual(), cargarReferencias()])
+      .then(([lista, actual]) => {
         setSucursales(lista)
+        setTurno(actual.turno)
+        setTurnoSinConexion(Boolean(actual.sin_conexion))
         const activa = useSucursalActivaStore.getState()
-        if (!activa.sucursal && lista.length > 0) activa.seleccionar(lista[0])
+        const delTurno = actual.turno ? lista.find((x) => x.id === actual.turno.sucursal_id) : null
+        if (delTurno) {
+          if (activa.sucursal?.id !== delTurno.id) setCargandoStock(true)
+          activa.seleccionar(delTurno)
+        } else if (!activa.sucursal && lista.length > 0) {
+          activa.seleccionar(lista[0])
+        }
         setCargandoBase(false)
       })
       .catch((e) => {
@@ -122,6 +168,17 @@ export default function PuntoVenta() {
     pedirStock(sucursalId)
   }
 
+  const alAbrirTurno = (actual) => {
+    setAbriendoTurno(false)
+    setTurno(actual.turno)
+    const s = sucursales.find((x) => x.id === actual.turno.sucursal_id)
+    if (s && s.id !== sucursalId) {
+      setTicket([])
+      setCargandoStock(true)
+      useSucursalActivaStore.getState().seleccionar(s)
+    }
+  }
+
   const cambiarSucursal = (valor) => {
     if (ticket.length > 0 && !window.confirm('Cambiar de sucursal vacía el ticket actual. ¿Continuar?')) return
     const s = sucursales.find((x) => x.id === Number(valor))
@@ -135,7 +192,7 @@ export default function PuntoVenta() {
   const enTicket = (s) => ticket.find((i) => i.stock.id === s.id)?.cantidad ?? 0
 
   const agregar = (s) => {
-    const disponible = s.cantidad - enTicket(s)
+    const disponible = existencias(s) - enTicket(s)
     if (disponible <= 0) {
       toast.advertencia('No queda más stock de ese producto en esta sucursal')
       return
@@ -157,8 +214,8 @@ export default function PuntoVenta() {
 
   const cambiarCantidad = (item, delta) => {
     const nueva = item.cantidad + delta
-    if (nueva > item.stock.cantidad) {
-      toast.advertencia(`Solo hay ${item.stock.cantidad} en stock`)
+    if (nueva > existencias(item.stock)) {
+      toast.advertencia(`Solo hay ${existencias(item.stock)} en stock`)
       return
     }
     setTicket((lista) =>
@@ -175,7 +232,7 @@ export default function PuntoVenta() {
   }
 
   const abrirCobro = () => {
-    if (ticket.length === 0) return
+    if (ticket.length === 0 || !turno) return
     setErrorCobro(null)
     setCobrando(true)
   }
@@ -194,38 +251,97 @@ export default function PuntoVenta() {
     setProcesando(true)
     setErrorCobro(null)
 
+    const idCliente = nuevoUuid()
+    const payload = {
+      tipo_venta: 'presencial',
+      usuario_id: usuarioId,
+      metodo_pago: cobro.metodo,
+      detalles: ticket.map((i) => ({ producto_sucursal_id: i.stock.id, cantidad: i.cantidad })),
+    }
+
+    const terminar = (ruta) => {
+      setProcesando(false)
+      setCobrando(false)
+      setTicket([])
+      setClienteId('')
+      navigate(ruta, { state: { cobro } })
+    }
+
+    // Sin conexión con el servidor, la venta se guarda en este equipo y se envía sola después.
+    const guardarSinConexion = () =>
+      useColaVentasStore
+        .getState()
+        .encolar({
+          id_cliente: idCliente,
+          usuario_id: cajero.id,
+          creada_en: new Date().toISOString(),
+          payload,
+          ticket: {
+            sucursal: sucursal ? { id: sucursal.id, nombre: sucursal.nombre, ubicacion: sucursal.ubicacion } : null,
+            items: ticket.map((i) => ({
+              nombre: i.stock.producto?.nombre ?? 'Producto',
+              talla: referencias.nombre('tallas', i.stock.producto?.talla_id),
+              color: referencias.nombre('colores', i.stock.producto?.color_id),
+              precio: precioDe(i),
+              precio_lista: Number(i.stock.precio),
+              cantidad: i.cantidad,
+            })),
+            total,
+            unidades,
+            cliente_id: clienteTexto ? usuarioId : null,
+            cajero: { nombre: cajero.nombre, apellido: cajero.apellido },
+            turno_id: turno?.id ?? null,
+          },
+        })
+        .then(() => {
+          toast.advertencia('Sin conexión: la venta quedó guardada y se sincroniza sola al volver la red')
+          terminar(`/panel/pos/comprobante/local/${idCliente}`)
+        })
+        .catch(() => {
+          setProcesando(false)
+          setErrorCobro('No hay conexión y este navegador no permite guardar la venta. Cobra cuando vuelva la red.')
+        })
+
+    // Siempre se intenta enviar (en localhost el servidor responde aunque no haya red).
+    // Si no contesta a tiempo se guarda en el equipo; el id_cliente evita duplicarla si
+    // justo había llegado.
     ventasService
-      .crear({
-        tipo_venta: 'presencial',
-        usuario_id: usuarioId,
-        detalles: ticket.map((i) => ({ producto_sucursal_id: i.stock.id, cantidad: i.cantidad })),
-      })
-      .then((venta) =>
-        comprobantesService.listar().then((existentes) =>
-          comprobantesService.emitir({
-            nombre: `Ticket 001-${String(existentes.length + 1).padStart(4, '0')}`,
-            cantidad: unidades,
-            monto: Number(venta.total).toFixed(2),
-            venta_id: venta.id,
-          }),
-        ),
-      )
-      .then((comprobante) => {
-        setProcesando(false)
-        setCobrando(false)
-        setTicket([])
-        setClienteId('')
-        navigate(`/panel/pos/comprobante/${comprobante.venta_id}`, { state: { cobro } })
-      })
+      .crear({ ...payload, id_cliente: idCliente }, { timeout: ESPERA_SERVIDOR_MS })
+      .then((venta) => emitirTicket(venta).then(() => venta))
+      .then((venta) => terminar(`/panel/pos/comprobante/${venta.id}`))
       .catch((e) => {
+        if (e.status === 0) {
+          guardarSinConexion()
+          return
+        }
         setProcesando(false)
         setErrorCobro(e.status === 400 && /usuario/i.test(e.message) ? 'No existe un cliente con ese ID.' : e.message)
-        if (e.status === 409) cargar()
+        if (e.status === 409) {
+          cargar()
+          cajaService.turnoActual().then((actual) => setTurno(actual.turno)).catch(() => {})
+        }
       })
   }
 
   let grilla
-  if (cargando) {
+  if (!cargandoBase && !turno && !error) {
+    grilla = (
+      <div className="tarjeta flex flex-col items-center py-16 text-center">
+        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-surface-container">
+          <span className="material-symbols-outlined text-[32px] text-primary">lock_open</span>
+        </div>
+        <p className="font-semibold text-on-surface">Abre tu turno de caja para empezar a cobrar</p>
+        <p className="mt-1 max-w-sm text-sm text-on-surface-variant">
+          {enLinea
+            ? 'Registra el efectivo inicial; al terminar cierras el turno y se hace el arqueo.'
+            : 'Sin conexión no se puede abrir un turno. Ábrelo cuando vuelva la red; un turno ya abierto sí sigue cobrando offline.'}
+        </p>
+        <button type="button" className="btn-primario mt-5" disabled={!enLinea} onClick={() => setAbriendoTurno(true)}>
+          <span className="material-symbols-outlined text-[18px]">point_of_sale</span> Abrir turno
+        </button>
+      </div>
+    )
+  } else if (cargando) {
     grilla = <Skeleton tipo="tarjetas" cantidad={8} />
   } else if (error) {
     grilla = (
@@ -256,7 +372,7 @@ export default function PuntoVenta() {
         {productos.map((s) => {
           const foto = s.producto ? productosService.urlFoto(s.producto) : null
           const n = enTicket(s)
-          const disponible = s.cantidad - n
+          const disponible = existencias(s) - n
           return (
             <button
               key={s.id}
@@ -332,7 +448,8 @@ export default function PuntoVenta() {
                 className="campo w-56 appearance-none py-3.5 pl-9 pr-9 font-semibold"
                 value={sucursal?.id ?? ''}
                 onChange={(e) => cambiarSucursal(e.target.value)}
-                disabled={cargandoBase}
+                disabled={cargandoBase || Boolean(turno)}
+                title={turno ? 'El turno abierto fija la sucursal' : undefined}
                 aria-label="Sucursal"
               >
                 {sucursales.map((s) => (
@@ -365,8 +482,24 @@ export default function PuntoVenta() {
 
         <aside className="flex h-full flex-col border-l border-outline-variant bg-surface-container-lowest lg:w-[40%]">
           <header className="border-b border-outline-variant px-5 py-4">
-            <h2 className="text-lg font-semibold text-on-surface">Venta actual</h2>
-            <p className="text-xs text-on-surface-variant">{sucursal?.nombre ?? 'Elige una sucursal'}</p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-on-surface">Venta actual</h2>
+                <p className="text-xs text-on-surface-variant">{sucursal?.nombre ?? 'Elige una sucursal'}</p>
+              </div>
+              {turno ? (
+                <Link
+                  to="/panel/caja"
+                  className={cx('chip hover:underline', enLinea && !turnoSinConexion ? 'text-success' : 'text-warning')}
+                  title={enLinea ? 'Ver arqueo y cerrar turno' : 'Sin conexión: las ventas se guardan en este equipo'}
+                >
+                  <span className="material-symbols-outlined text-[14px]">{enLinea ? 'lock_open' : 'cloud_off'}</span>
+                  Turno {numeroTurno(turno.id)}
+                </Link>
+              ) : (
+                <span className="chip-suave">Sin turno</span>
+              )}
+            </div>
             <div className="mt-3 flex items-center gap-2">
               <label className="text-xs font-semibold text-on-surface-variant" htmlFor="pos-cliente">
                 Cliente
@@ -405,7 +538,15 @@ export default function PuntoVenta() {
                       <p className="truncate text-sm font-semibold text-on-surface">{item.stock.producto?.nombre}</p>
                       <p className="text-xs text-on-surface-variant">
                         {referencias.nombre('tallas', item.stock.producto?.talla_id)} ·{' '}
-                        {referencias.nombre('colores', item.stock.producto?.color_id)} · {monedaBs(item.stock.precio)} c/u
+                        {referencias.nombre('colores', item.stock.producto?.color_id)} ·{' '}
+                        {porMayor(item) ? (
+                          <span className="font-semibold text-success">
+                            <span className="line-through opacity-70">{monedaBs(item.stock.precio)}</span>{' '}
+                            {monedaBs(precioDe(item))} c/u por mayor
+                          </span>
+                        ) : (
+                          `${monedaBs(item.stock.precio)} c/u`
+                        )}
                       </p>
                     </div>
                     <div className="flex items-center rounded-lg border border-outline-variant">
@@ -421,7 +562,7 @@ export default function PuntoVenta() {
                       <button
                         type="button"
                         className="px-2 py-1 text-on-surface-variant hover:text-primary disabled:opacity-40"
-                        disabled={item.cantidad >= item.stock.cantidad}
+                        disabled={item.cantidad >= existencias(item.stock)}
                         onClick={() => cambiarCantidad(item, 1)}
                         aria-label="Más"
                       >
@@ -429,7 +570,7 @@ export default function PuntoVenta() {
                       </button>
                     </div>
                     <span className="w-24 text-right text-sm font-bold tabular-nums">
-                      {monedaBs(+item.stock.precio * item.cantidad)}
+                      {monedaBs(precioDe(item) * item.cantidad)}
                     </span>
                     <button type="button" className="btn-icono-peligro p-1" title="Quitar" onClick={() => quitar(item)}>
                       <span className="material-symbols-outlined text-[18px]">delete</span>
@@ -445,8 +586,21 @@ export default function PuntoVenta() {
               <span>
                 Subtotal ({unidades} {unidades === 1 ? 'unidad' : 'unidades'})
               </span>
-              <span className="tabular-nums">{monedaBs(subtotal)}</span>
+              <span className="tabular-nums">{monedaBs(subtotalLista)}</span>
             </div>
+            {subtotalLista > subtotal ? (
+              <div className="flex justify-between text-sm font-semibold text-success">
+                <span>Precio por mayor</span>
+                <span className="tabular-nums">−{monedaBs(subtotalLista - subtotal)}</span>
+              </div>
+            ) : (
+              faltan > 0 &&
+              faltan <= 3 && (
+                <p className="text-xs text-on-surface-variant">
+                  Con {faltan} {faltan === 1 ? 'prenda más' : 'prendas más'} con precio por mayor se cobra por mayor.
+                </p>
+              )
+            )}
             <div className="mt-1 flex items-end justify-between">
               <span className="text-base font-semibold text-on-surface">Total</span>
               <span className="text-4xl font-bold tabular-nums text-on-surface">{monedaBs(total)}</span>
@@ -454,7 +608,7 @@ export default function PuntoVenta() {
             <button
               type="button"
               className="btn-primario mt-4 w-full py-3.5 text-base"
-              disabled={ticket.length === 0}
+              disabled={ticket.length === 0 || !turno}
               onClick={abrirCobro}
             >
               <span className="material-symbols-outlined text-[22px]">point_of_sale</span> Cobrar
@@ -478,6 +632,15 @@ export default function PuntoVenta() {
           error={errorCobro}
           onConfirmar={confirmarCobro}
           onCancelar={() => setCobrando(false)}
+        />
+      )}
+
+      {abriendoTurno && (
+        <ModalAbrirTurno
+          sucursales={sucursales}
+          sucursalInicial={sucursalId}
+          onCerrar={() => setAbriendoTurno(false)}
+          onAbierto={alAbrirTurno}
         />
       )}
 

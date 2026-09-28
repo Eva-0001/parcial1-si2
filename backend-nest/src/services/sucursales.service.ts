@@ -61,7 +61,7 @@ export class SucursalesService {
 
     if (await this.repo.tieneMovimientos(id)) {
       throw new ConflictException(
-        'No se puede eliminar la sucursal porque tiene ventas o reservas',
+        'No se puede eliminar la sucursal porque tiene ventas, reservas, turnos de caja, movimientos de almacen o pedidos online',
       );
     }
 

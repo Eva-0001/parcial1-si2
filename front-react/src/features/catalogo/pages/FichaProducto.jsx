@@ -30,7 +30,6 @@ export default function FichaProducto() {
   const [tallaSel, setTallaSel] = useState(null)
   const [cantidad, setCantidad] = useState(1)
   const [fotoSel, setFotoSel] = useState(null)
-  const [panelRA, setPanelRA] = useState(false)
 
   useEffect(() => {
     let vigente = true
@@ -110,10 +109,6 @@ export default function FichaProducto() {
     ? catalogo.grupos.filter((x) => x.clave !== grupo.clave && x.categoria_id === grupo.categoria_id).slice(0, 4)
     : []
 
-  const urlQR = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=${encodeURIComponent(
-    `${window.location.origin}/producto/${grupo?.id ?? id}`,
-  )}`
-
   const elegirColor = (cid) => {
     setColorSel(cid)
     setFotoSel(null)
@@ -148,6 +143,8 @@ export default function FichaProducto() {
     sucursal_id: sucursal.id,
     sucursal: sucursal.nombre,
     precio: Number(stockActivo.precio),
+    precio_mayor: variante.precio_mayor !== null ? Number(variante.precio_mayor) : null,
+    minimo_mayor: variante.minimo_mayor,
     maximo: stockActivo.cantidad,
   })
 
@@ -290,11 +287,28 @@ export default function FichaProducto() {
             )}
           </div>
 
+          {variante?.precio_mayor != null && precio && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg bg-surface-container p-3 text-sm">
+              <span className="material-symbols-outlined text-[20px] text-primary">inventory</span>
+              <span>
+                <span className="font-semibold text-on-surface">
+                  Por mayor: {monedaBs(Math.min(precio, Number(variante.precio_mayor)))} c/u
+                </span>{' '}
+                <span className="text-on-surface-variant">
+                  desde {variante.minimo_mayor} prendas surtidas (puedes combinar modelos, tallas y colores con precio
+                  por mayor).
+                </span>
+              </span>
+            </div>
+          )}
+
           <div className="mt-3 flex flex-wrap gap-1.5">
             {categoria && <span className="chip">{categoria}</span>}
             {coleccion && <span className="chip-suave">{coleccion}</span>}
             {temporada && <span className="chip-suave">{temporada}</span>}
           </div>
+
+          {g.descripcion && <p className="mt-4 whitespace-pre-line text-sm text-on-surface-variant">{g.descripcion}</p>}
 
           <div className="mt-7">
             <p className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
@@ -390,27 +404,6 @@ export default function FichaProducto() {
               Reservar para probar
             </button>
           </div>
-
-          <button type="button" className="btn-secundario mt-3 w-full border-dashed" onClick={() => setPanelRA(!panelRA)}>
-            <span className="material-symbols-outlined text-[20px] text-primary">view_in_ar</span>
-            Probar con realidad aumentada
-            <span className={cx('material-symbols-outlined text-[18px] transition-transform', panelRA && 'rotate-180')}>
-              expand_more
-            </span>
-          </button>
-          {panelRA && (
-            <div className="mt-3 flex items-center gap-5 rounded-xl border border-outline-variant bg-surface-container-lowest p-5">
-              <div className="flex h-[140px] w-[140px] shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white">
-                <img src={urlQR} alt="Código QR del producto" className="h-full w-full" />
-              </div>
-              <div>
-                <p className="font-semibold text-on-surface">Escanea con la app móvil para probártelo</p>
-                <p className="mt-1 text-sm text-on-surface-variant">
-                  El vestidor virtual usa la cámara de tu celular para mostrarte cómo te queda esta prenda.
-                </p>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 

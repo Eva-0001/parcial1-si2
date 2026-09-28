@@ -9,6 +9,10 @@ import {
   sucursalDeVenta,
   unidadesDeVenta,
 } from '@/features/ventas/ventas.utils'
+import { ESTADO_ENVIO, ETIQUETA_MODALIDAD } from '../envios.utils'
+import PedidosEnEspera from '../components/PedidosEnEspera'
+import { useColaPedidosStore } from '@/core/offline/cola-pedidos.store'
+import { useConexionStore } from '@/core/offline/conexion.store'
 import Skeleton from '@/shared/components/Skeleton'
 import EstadoVacio from '@/shared/components/EstadoVacio'
 import { monedaBs } from '@/shared/utils/moneda-bs'
@@ -26,6 +30,10 @@ export default function MisPedidos() {
   const [error, setError] = useState(null)
   const [ventas, setVentas] = useState([])
   const [filtro, setFiltro] = useState('todas')
+  // Cada vez que un pedido en espera llega al servidor, se vuelve a pedir la lista.
+  const confirmados = useColaPedidosStore((s) => s.confirmados)
+  const enLinea = useConexionStore((s) => s.enLinea)
+  const [sinConexion, setSinConexion] = useState(false)
 
   const pedir = useCallback(() => {
     ventasService
@@ -33,17 +41,25 @@ export default function MisPedidos() {
       .then((lista) => ventasService.obtenerVarias(lista.map((v) => v.id)))
       .then((detalles) => {
         setVentas([...detalles].sort((a, b) => b.id - a.id))
+        setError(null)
+        setSinConexion(false)
         setCargando(false)
       })
       .catch((e) => {
         setError(e.message)
+        setSinConexion(e.status === 0)
         setCargando(false)
       })
   }, [])
 
   useEffect(() => {
     pedir()
-  }, [pedir])
+  }, [pedir, confirmados])
+
+  // Al volver la conexión, la lista se recarga sola.
+  useEffect(() => {
+    if (enLinea && sinConexion) pedir()
+  }, [enLinea, sinConexion, pedir])
 
   const cargar = () => {
     setCargando(true)
@@ -61,6 +77,17 @@ export default function MisPedidos() {
   let contenido
   if (cargando) {
     contenido = <Skeleton tipo="tabla" cantidad={4} />
+  } else if (error && sinConexion) {
+    contenido = (
+      <div className="tarjeta flex flex-col items-center py-12 text-center">
+        <span className="material-symbols-outlined text-[40px] text-on-surface-variant">cloud_off</span>
+        <h3 className="mt-2 text-lg font-semibold text-on-surface">Estás sin conexión</h3>
+        <p className="max-w-md text-sm text-on-surface-variant">
+          Tus pedidos se mostrarán cuando vuelva la conexión. Mientras tanto puedes comprar pagando por QR o
+          contraentrega: el pedido quedará en espera y se enviará solo.
+        </p>
+      </div>
+    )
   } else if (error) {
     contenido = (
       <div className="tarjeta flex flex-col items-center py-16 text-center">
@@ -113,7 +140,9 @@ export default function MisPedidos() {
             >
               <div className="flex items-center gap-3 md:w-48">
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-surface-container text-primary">
-                  <span className="material-symbols-outlined">{v.tipo_venta === 'virtual' ? 'shopping_cart' : 'storefront'}</span>
+                  <span className="material-symbols-outlined">
+                    {v.tipo_venta === 'virtual' ? 'shopping_cart' : 'storefront'}
+                  </span>
                 </span>
                 <div>
                   <p className="font-semibold text-on-surface">{numeroVenta(v.id)}</p>
@@ -123,16 +152,38 @@ export default function MisPedidos() {
                 </div>
               </div>
               <div className="flex flex-1 flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-                <span className={cx('inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold', CHIP_TIPO[v.tipo_venta])}>
+                <span
+                  className={cx(
+                    'inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold',
+                    CHIP_TIPO[v.tipo_venta],
+                  )}
+                >
                   {ETIQUETA_TIPO[v.tipo_venta]}
                 </span>
                 <span className="text-on-surface-variant">
                   {unidades} {unidades === 1 ? 'producto' : 'productos'}
                 </span>
-                <span className="flex items-center gap-1 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-[16px]">store</span>
-                  {sucursalDeVenta(v)?.nombre ?? '—'}
-                </span>
+                {v.envio ? (
+                  <>
+                    <span
+                      className={cx(
+                        'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold',
+                        ESTADO_ENVIO[v.envio.estado].chip,
+                      )}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">
+                        {ESTADO_ENVIO[v.envio.estado].icono}
+                      </span>
+                      {ESTADO_ENVIO[v.envio.estado].etiqueta}
+                    </span>
+                    <span className="text-on-surface-variant">{ETIQUETA_MODALIDAD[v.envio.modalidad]}</span>
+                  </>
+                ) : (
+                  <span className="flex items-center gap-1 text-on-surface-variant">
+                    <span className="material-symbols-outlined text-[16px]">store</span>
+                    {sucursalDeVenta(v)?.nombre ?? '—'}
+                  </span>
+                )}
               </div>
               <div className="flex items-center justify-between gap-4 md:justify-end">
                 <span className="text-lg font-bold tabular-nums text-on-surface">{monedaBs(v.total)}</span>
@@ -175,6 +226,7 @@ export default function MisPedidos() {
         )}
       </div>
 
+      <PedidosEnEspera />
       {contenido}
     </>
   )

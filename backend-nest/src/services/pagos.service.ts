@@ -159,6 +159,22 @@ export class PagosService {
     }
   }
 
+  /** Devuelve el cobro completo de una intencion de pago ya aprobada. */
+  async reembolsar(pagoId: string, motivo: string): Promise<void> {
+    const stripe = this.exigirPasarela();
+    try {
+      await stripe.refunds.create({
+        payment_intent: pagoId,
+        reason: 'requested_by_customer',
+        metadata: { motivo: motivo.slice(0, 450) },
+      });
+    } catch (error) {
+      throw new BadGatewayException(
+        `Stripe no pudo hacer el reembolso: ${this.mensaje(error)}`,
+      );
+    }
+  }
+
   formatear(centavos: number): string {
     return deCentavos(centavos);
   }

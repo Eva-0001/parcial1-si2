@@ -15,13 +15,17 @@ export default function ModalCiudad({ ciudad = null, nombresOcupados = [], onCer
     handleSubmit,
     setError,
     formState: { errors },
-  } = useForm({ mode: 'onTouched', defaultValues: { nombre: ciudad?.nombre ?? '' } })
+  } = useForm({
+    mode: 'onTouched',
+    defaultValues: { nombre: ciudad?.nombre ?? '', costo_envio: ciudad?.costo_envio ?? '' },
+  })
 
   const guardar = (valores) => {
     setGuardando(true)
     setErrorGeneral(null)
 
-    const datos = { nombre: valores.nombre.trim() }
+    const costo = String(valores.costo_envio ?? '').trim().replace(',', '.')
+    const datos = { nombre: valores.nombre.trim(), costo_envio: costo === '' ? null : costo }
     const peticion = ciudad ? ciudadesService.actualizar(ciudad.id, datos) : ciudadesService.crear(datos)
 
     peticion
@@ -80,6 +84,25 @@ export default function ModalCiudad({ ciudad = null, nombresOcupados = [], onCer
           })}
         />
         {errors.nombre && <p className="mensaje-campo">{errorDe(errors.nombre)}</p>}
+
+        <label className="etiqueta mt-5" htmlFor="ciudad-envio">
+          Costo de envío a domicilio (Bs)
+        </label>
+        <input
+          id="ciudad-envio"
+          type="text"
+          inputMode="decimal"
+          placeholder="Ej. 20.00"
+          className={cx('campo', errors.costo_envio && 'campo-invalido')}
+          {...register('costo_envio', {
+            pattern: { value: /^\d{1,8}([.,]\d{1,2})?$/, message: 'Monto con hasta 2 decimales' },
+          })}
+        />
+        {errors.costo_envio ? (
+          <p className="mensaje-campo">{errorDe(errors.costo_envio)}</p>
+        ) : (
+          <p className="mt-1 text-xs text-on-surface-variant">Déjalo vacío si todavía no hacen envíos a esta ciudad.</p>
+        )}
       </form>
     </Modal>
   )

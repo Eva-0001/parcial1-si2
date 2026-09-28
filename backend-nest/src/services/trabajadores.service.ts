@@ -105,7 +105,7 @@ export class TrabajadoresService {
 
     if (await this.usuarios.tieneMovimientos(id)) {
       throw new ConflictException(
-        'No se puede eliminar el trabajador porque tiene ventas o reservas',
+        'No se puede eliminar el trabajador porque tiene ventas, reservas, turnos de caja o movimientos de almacen',
       );
     }
 

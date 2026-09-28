@@ -72,7 +72,16 @@ export class UsuariosRepository {
       this.ventas.existsBy({ usuario_id: id }),
       this.reservas.existsBy({ usuario_id: id }),
     ]);
-    return conVentas || conReservas;
+    if (conVentas || conReservas) return true;
+
+    // Turnos de caja y movimientos de almacen guardan quien los hizo.
+    const filas = await this.usuarios.query<{ existe: boolean }[]>(
+      `SELECT EXISTS (SELECT 1 FROM turnos_caja WHERE cajero_id = $1)
+           OR EXISTS (SELECT 1 FROM movimientos_caja WHERE usuario_id = $1)
+           OR EXISTS (SELECT 1 FROM movimientos_almacen WHERE usuario_id = $1) AS existe`,
+      [id],
+    );
+    return filas[0]?.existe === true;
   }
 
   crear(datos: Partial<Usuario>): Usuario {
