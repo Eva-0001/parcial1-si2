@@ -1,12 +1,43 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import {
+  type ConsultaAMedida,
+  armarConsultaAMedida,
+} from '../commons/reportes/consulta-a-medida.js';
 
 export interface RangoDeFechas {
   desde?: string;
   hasta?: string;
   sucursal_id?: number;
+  /** Solo prendas de esta categoria. */
+  categoria_id?: number;
+  /** Solo variantes de este modelo de prenda (el "producto" que ve el usuario). */
+  modelo_id?: number;
 }
+
+/**
+ * Filtro comun de los reportes de ventas: $1 desde, $2 hasta, $3 sucursal,
+ * $4 categoria, $5 modelo. Requiere los alias v (ventas), ps
+ * (producto_sucursal) y p (productos).
+ */
+const FILTRO_VENTAS = `v.cancelada_en IS NULL
+         AND ($1::date IS NULL OR v.creada_en >= $1::date)
+         AND ($2::date IS NULL OR v.creada_en < $2::date + INTERVAL '1 day')
+         AND ($3::int IS NULL OR ps.sucursal_id = $3::int)
+         AND ($4::int IS NULL OR p.categoria_id = $4::int)
+         AND ($5::int IS NULL OR p.modelo_id = $5::int)`;
+
+const parametrosDe = (rango: RangoDeFechas) => [
+  rango.desde ?? null,
+  rango.hasta ?? null,
+  rango.sucursal_id ?? null,
+  rango.categoria_id ?? null,
+  rango.modelo_id ?? null,
+];
+
+/** Unidad de tiempo para agrupar ventas. */
+export type Periodo = 'week' | 'month';
 
 @Injectable()
 export class ReportesRepository {
@@ -22,11 +53,9 @@ export class ReportesRepository {
        FROM ventas v
        JOIN detalle_venta dv ON dv.venta_id = v.id
        JOIN producto_sucursal ps ON ps.id = dv.producto_sucursal_id
-       WHERE v.cancelada_en IS NULL
-         AND ($1::date IS NULL OR v.creada_en >= $1::date)
-         AND ($2::date IS NULL OR v.creada_en < $2::date + INTERVAL '1 day')
-         AND ($3::int IS NULL OR ps.sucursal_id = $3::int)`,
-      [rango.desde ?? null, rango.hasta ?? null, rango.sucursal_id ?? null],
+       JOIN productos p ON p.id = ps.producto_id
+       WHERE ${FILTRO_VENTAS}`,
+      parametrosDe(rango),
     );
   }
 
@@ -39,13 +68,11 @@ export class ReportesRepository {
        FROM ventas v
        JOIN detalle_venta dv ON dv.venta_id = v.id
        JOIN producto_sucursal ps ON ps.id = dv.producto_sucursal_id
-       WHERE v.cancelada_en IS NULL
-         AND ($1::date IS NULL OR v.creada_en >= $1::date)
-         AND ($2::date IS NULL OR v.creada_en < $2::date + INTERVAL '1 day')
-         AND ($3::int IS NULL OR ps.sucursal_id = $3::int)
+       JOIN productos p ON p.id = ps.producto_id
+       WHERE ${FILTRO_VENTAS}
        GROUP BY dia
        ORDER BY dia`,
-      [rango.desde ?? null, rango.hasta ?? null, rango.sucursal_id ?? null],
+      parametrosDe(rango),
     );
   }
 
@@ -65,19 +92,11 @@ export class ReportesRepository {
        JOIN producto_sucursal ps ON ps.id = dv.producto_sucursal_id
        JOIN productos p ON p.id = ps.producto_id
        LEFT JOIN categorias c ON c.id = p.categoria_id
-       WHERE v.cancelada_en IS NULL
-         AND ($1::date IS NULL OR v.creada_en >= $1::date)
-         AND ($2::date IS NULL OR v.creada_en < $2::date + INTERVAL '1 day')
-         AND ($3::int IS NULL OR ps.sucursal_id = $3::int)
+       WHERE ${FILTRO_VENTAS}
        GROUP BY p.id, p.nombre, c.nombre
        ORDER BY unidades DESC, importe DESC
-       LIMIT $4`,
-      [
-        rango.desde ?? null,
-        rango.hasta ?? null,
-        rango.sucursal_id ?? null,
-        limite,
-      ],
+       LIMIT $6`,
+      [...parametrosDe(rango), limite],
     );
   }
 
@@ -93,13 +112,67 @@ export class ReportesRepository {
        JOIN detalle_venta dv ON dv.venta_id = v.id
        JOIN producto_sucursal ps ON ps.id = dv.producto_sucursal_id
        JOIN sucursales s ON s.id = ps.sucursal_id
-       WHERE v.cancelada_en IS NULL
-         AND ($1::date IS NULL OR v.creada_en >= $1::date)
-         AND ($2::date IS NULL OR v.creada_en < $2::date + INTERVAL '1 day')
-         AND ($3::int IS NULL OR ps.sucursal_id = $3::int)
+       JOIN productos p ON p.id = ps.producto_id
+       WHERE ${FILTRO_VENTAS}
        GROUP BY s.id, s.nombre
        ORDER BY SUM(dv.cantidad * dv.precio) DESC`,
-      [rango.desde ?? null, rango.hasta ?? null, rango.sucursal_id ?? null],
+      parametrosDe(rango),
+    );
+  }
+
+  /** Ventas agrupadas por semana (lunes de cada semana) o por mes. */
+  ventasPorPeriodo(
+    rango: RangoDeFechas,
+    periodo: Periodo,
+  ): Promise<Record<string, unknown>[]> {
+    const formato = periodo === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD';
+    return this.dataSource.query(
+      `SELECT
+         to_char(date_trunc('${periodo}', v.creada_en), '${formato}') AS periodo,
+         COUNT(DISTINCT v.id)::int                       AS ventas,
+         COALESCE(SUM(dv.cantidad), 0)::int              AS unidades,
+         COALESCE(SUM(dv.cantidad * dv.precio), 0)::text AS importe
+       FROM ventas v
+       JOIN detalle_venta dv ON dv.venta_id = v.id
+       JOIN producto_sucursal ps ON ps.id = dv.producto_sucursal_id
+       JOIN productos p ON p.id = ps.producto_id
+       WHERE ${FILTRO_VENTAS}
+       GROUP BY periodo
+       ORDER BY periodo`,
+      parametrosDe(rango),
+    );
+  }
+
+  /** Ingresos por categoria de prenda, de mayor a menor. */
+  ventasPorCategoria(rango: RangoDeFechas): Promise<Record<string, unknown>[]> {
+    return this.dataSource.query(
+      `SELECT
+         COALESCE(c.nombre, 'Sin categoria')             AS categoria,
+         COUNT(DISTINCT v.id)::int                       AS ventas,
+         COALESCE(SUM(dv.cantidad), 0)::int              AS unidades,
+         COALESCE(SUM(dv.cantidad * dv.precio), 0)::text AS importe
+       FROM ventas v
+       JOIN detalle_venta dv ON dv.venta_id = v.id
+       JOIN producto_sucursal ps ON ps.id = dv.producto_sucursal_id
+       JOIN productos p ON p.id = ps.producto_id
+       LEFT JOIN categorias c ON c.id = p.categoria_id
+       WHERE ${FILTRO_VENTAS}
+       GROUP BY c.nombre
+       ORDER BY SUM(dv.cantidad * dv.precio) DESC`,
+      parametrosDe(rango),
+    );
+  }
+
+  categorias(): Promise<{ id: number; nombre: string }[]> {
+    return this.dataSource.query(
+      `SELECT id, nombre FROM categorias ORDER BY nombre`,
+    );
+  }
+
+  /** Modelos de prenda (lo que el usuario llama "producto"); variantes aparte. */
+  modelos(): Promise<{ id: number; nombre: string }[]> {
+    return this.dataSource.query(
+      `SELECT id, nombre FROM modelos ORDER BY nombre LIMIT 300`,
     );
   }
 
@@ -300,17 +373,37 @@ export class ReportesRepository {
   }
 
   /**
-   * Ejecuta el SQL que escribio la IA para un reporte libre. Corre en una transaccion
-   * de solo lectura y con tiempo limite, y se envuelve en un SELECT con LIMIT.
+   * Ventas agrupadas por una dimension de la lista blanca (reporte "a medida" de la IA).
+   * El SQL lo arma `armarConsultaAMedida` con fragmentos fijos y valores parametrizados;
+   * ademas corre en solo lectura y con tiempo limite, y RLS lo limita a la empresa.
    */
-  consultaLibre(sql: string, limite = 500): Promise<Record<string, unknown>[]> {
+  ventasAMedida(consulta: ConsultaAMedida): Promise<Record<string, unknown>[]> {
+    const { sql, parametros } = armarConsultaAMedida(consulta);
     return this.dataSource.transaction(async (manager) => {
       await manager.query('SET TRANSACTION READ ONLY');
       await manager.query("SET LOCAL statement_timeout = '5s'");
-      return manager.query(
-        `SELECT * FROM (${sql}) AS consulta_libre LIMIT ${limite}`,
-      );
+      return manager.query(sql, parametros);
     });
+  }
+
+  /** Colores, tallas y temporadas para que la IA traduzca nombres a ids. */
+  async atributosDePrenda(): Promise<{
+    colores: { id: number; nombre: string }[];
+    tallas: { id: number; nombre: string }[];
+    temporadas: { id: number; nombre: string }[];
+  }> {
+    const [colores, tallas, temporadas] = await Promise.all([
+      this.dataSource.query(
+        `SELECT id, nombre FROM colores ORDER BY nombre LIMIT 200`,
+      ),
+      this.dataSource.query(
+        `SELECT id, nombre FROM talla ORDER BY id LIMIT 100`,
+      ),
+      this.dataSource.query(
+        `SELECT id, nombre FROM temporadas ORDER BY nombre LIMIT 100`,
+      ),
+    ]);
+    return { colores, tallas, temporadas };
   }
 
   /**

@@ -12,6 +12,8 @@ import type {
 } from '../dto/ubicacion.dto.js';
 import type { Sucursal } from '../entities/sucursal.entity.js';
 import { SucursalesRepository } from '../repositories/ubicacion.repository.js';
+import { empresaActualId } from '../commons/tenant/contexto-tenant.js';
+import { EmpresasService } from './empresas.service.js';
 
 const NO_ENCONTRADA = 'Sucursal no encontrada';
 
@@ -22,6 +24,7 @@ export class SucursalesService {
   constructor(
     private readonly repo: SucursalesRepository,
     private readonly archivos: ArchivosService,
+    private readonly empresas: EmpresasService,
   ) {}
 
   listar(filtro: FiltroSucursalesDto): Promise<Sucursal[]> {
@@ -41,6 +44,8 @@ export class SucursalesService {
   }
 
   async crear(datos: CrearSucursalDto): Promise<Sucursal> {
+    // Limite del plan contratado (Basico: 2, Profesional: 10, configurable).
+    await this.empresas.verificarCupoDeSucursales(empresaActualId());
     await this.verificarCiudad(datos.ciudad_id);
     return this.repo.crear(datos);
   }

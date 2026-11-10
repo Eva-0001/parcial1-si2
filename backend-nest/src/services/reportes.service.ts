@@ -7,18 +7,32 @@ import type {
   TipoReporte,
 } from '../dto/reporte.dto.js';
 import type { Usuario } from '../entities/usuario.entity.js';
-import { ReportesRepository } from '../repositories/reportes.repository.js';
+import { MlService } from './ml.service.js';
+import {
+  type Periodo,
+  ReportesRepository,
+} from '../repositories/reportes.repository.js';
 
 export interface ReporteTabular {
   tipo: TipoReporte;
   titulo: string;
   parametros: ParametrosReporte;
-  grafico: 'barras' | 'lineas';
+  grafico: Grafico;
   formato: 'bs' | 'entero';
   serie: { etiqueta: string; valor: number; detalle?: string }[];
   tabla: { encabezados: string[]; filas: (string | number)[][] };
   totales: Record<string, unknown>;
 }
+
+export type Grafico = 'barras' | 'lineas' | 'torta';
+
+/**
+ * Seleccion dinamica del grafico de una participacion (partes de un total):
+ * torta con 3 a 8 partes (la web junta las menores en "Otros" a partir de 7);
+ * con 2 partes o con muchas, barras ordenadas comparan mejor.
+ */
+export const graficoDeParticipacion = (partes: number): Grafico =>
+  partes >= 3 && partes <= 8 ? 'torta' : 'barras';
 
 /** Roles que solo ven reportes de la sucursal de su ficha de trabajador. */
 const ROLES_DE_SUCURSAL: readonly string[] = [Rol.ENCARGADO, Rol.CAJERO];
@@ -27,6 +41,44 @@ export const limitadoASucursal = (usuario: Usuario) =>
   ROLES_DE_SUCURSAL.includes(usuario.rol?.nombre ?? '');
 
 const bs = (valor: unknown) => Number(valor ?? 0).toFixed(2);
+
+/** "2026-09" -> "Sep 2026" */
+const MESES = [
+  'Ene',
+  'Feb',
+  'Mar',
+  'Abr',
+  'May',
+  'Jun',
+  'Jul',
+  'Ago',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dic',
+];
+const nombreDeMes = (periodo: string) => {
+  const [anio, mes] = periodo.split('-');
+  return `${MESES[Number(mes) - 1] ?? mes} ${anio}`;
+};
+/** Lunes "2026-09-07" -> "Sem. 07/09" */
+const nombreDeSemana = (lunes: string) =>
+  `Sem. ${lunes.slice(8, 10)}/${lunes.slice(5, 7)}`;
+
+/** Como se agrupa cada tipo de reporte (para mostrarlo como filtro aplicado). */
+export const AGRUPACION_DE_REPORTE: Record<TipoReporte, string> = {
+  ventas_por_dia: 'Dia',
+  ventas_por_semana: 'Semana',
+  ventas_por_mes: 'Mes',
+  ventas_por_sucursal: 'Sucursal',
+  ventas_por_categoria: 'Categoria',
+  top_productos: 'Prenda',
+  inventario_por_sucursal: 'Sucursal',
+  por_reponer: 'Prenda y sucursal',
+  reservas: 'Reserva',
+  prediccion_demanda: 'Sucursal y categoría',
+  segmentos_clientes: 'Segmento de clientes',
+};
 
 const contarPor = (filas: Record<string, unknown>[], campo: string) => {
   const conteo = new Map<string, number>();
@@ -39,7 +91,10 @@ const contarPor = (filas: Record<string, unknown>[], campo: string) => {
 
 @Injectable()
 export class ReportesService {
-  constructor(private readonly repo: ReportesRepository) {}
+  constructor(
+    private readonly repo: ReportesRepository,
+    private readonly ml: MlService,
+  ) {}
 
   async ventas(filtro: FiltroReporteVentasDto) {
     const rango = {
@@ -133,9 +188,216 @@ export class ReportesService {
       desde: parametros.desde,
       hasta: parametros.hasta,
       sucursal_id: parametros.sucursal_id,
+      categoria_id: parametros.categoria_id,
+      modelo_id: parametros.modelo_id,
     };
 
     switch (tipo) {
+      case 'prediccion_demanda': {
+        // Resultado del Random Forest entrenado (Analitica inteligente).
+        const modelo = await this.ml.exigirModelo('demanda');
+        type Pronostico = {
+          sucursal_id: number;
+          sucursal: string;
+          categoria_id: number;
+          categoria: string;
+          semanas: { semana: string; unidades: number }[];
+        };
+        type Reposicion = {
+          sucursal: string;
+          categoria: string;
+          stock_disponible: number;
+          sugerido: number;
+        };
+        const reposicion = new Map(
+          (modelo.resultados.reposicion as Reposicion[]).map((r) => [
+            `${r.sucursal}|${r.categoria}`,
+            r,
+          ]),
+        );
+        const filas = (modelo.resultados.pronostico as Pronostico[]).filter(
+          (p) =>
+            (parametros.sucursal_id === undefined ||
+              p.sucursal_id === parametros.sucursal_id) &&
+            (parametros.categoria_id === undefined ||
+              p.categoria_id === parametros.categoria_id),
+        );
+        const semanas = filas[0]?.semanas.map((s) => s.semana) ?? [];
+        const totalPorSemana = semanas.map((semana, i) =>
+          filas.reduce((s, f) => s + f.semanas[i].unidades, 0),
+        );
+        return {
+          tipo,
+          titulo: 'Prediccion de demanda (proximas 4 semanas)',
+          parametros,
+          grafico: 'lineas',
+          formato: 'entero',
+          serie: semanas.map((semana, i) => ({
+            etiqueta: nombreDeSemana(semana),
+            detalle: `${Math.round(totalPorSemana[i])} prendas estimadas`,
+            valor: Math.round(totalPorSemana[i]),
+          })),
+          tabla: {
+            encabezados: [
+              'Sucursal',
+              'Categoria',
+              ...semanas.map(nombreDeSemana),
+              'Stock disponible',
+              'Reponer',
+            ],
+            filas: filas
+              .map((f) => {
+                const r = reposicion.get(`${f.sucursal}|${f.categoria}`);
+                return [
+                  f.sucursal,
+                  f.categoria,
+                  ...f.semanas.map((s) => Math.round(s.unidades)),
+                  r?.stock_disponible ?? 0,
+                  r?.sugerido ?? 0,
+                ] as (string | number)[];
+              })
+              .sort(
+                (a, b) => Number(b[b.length - 1]) - Number(a[a.length - 1]),
+              ),
+          },
+          totales: {
+            modelo: `Random Forest v${modelo.version}`,
+            mae_prueba: modelo.metricas.mae,
+            r2_prueba: modelo.metricas.r2,
+            mejora_vs_referencia_pct: modelo.metricas.mejora_mae_pct,
+          },
+        };
+      }
+
+      case 'segmentos_clientes': {
+        const modelo = await this.ml.exigirModelo('segmentos');
+        type Segmento = {
+          nombre: string;
+          clientes: number;
+          clientes_reales: number;
+          recencia_promedio: number;
+          frecuencia_promedio: number;
+          monto_promedio: number;
+          recomendacion: string;
+        };
+        const segmentos = modelo.resultados.segmentos as Segmento[];
+        return {
+          tipo,
+          titulo: 'Segmentos de clientes',
+          parametros,
+          grafico: graficoDeParticipacion(segmentos.length),
+          formato: 'entero',
+          serie: segmentos.map((s) => ({
+            etiqueta: s.nombre,
+            detalle: `${s.clientes_reales} clientes reales`,
+            valor: s.clientes,
+          })),
+          tabla: {
+            encabezados: [
+              'Segmento',
+              'Clientes',
+              'Clientes reales',
+              'Dias desde la ultima compra',
+              'Compras promedio',
+              'Gasto promedio (Bs)',
+              'Recomendacion',
+            ],
+            filas: segmentos.map((s) => [
+              s.nombre,
+              s.clientes,
+              s.clientes_reales,
+              s.recencia_promedio,
+              s.frecuencia_promedio,
+              bs(s.monto_promedio),
+              s.recomendacion,
+            ]),
+          },
+          totales: {
+            modelo: `K-means v${modelo.version}`,
+            k: modelo.metricas.k_elegido,
+            silhouette: modelo.metricas.silhouette,
+          },
+        };
+      }
+
+      case 'ventas_por_semana':
+      case 'ventas_por_mes': {
+        const periodo: Periodo = tipo === 'ventas_por_mes' ? 'month' : 'week';
+        const nombre = periodo === 'month' ? nombreDeMes : nombreDeSemana;
+        const [resumen, filas] = await Promise.all([
+          this.repo.resumenDeVentas(rango),
+          this.repo.ventasPorPeriodo(rango, periodo),
+        ]);
+        return {
+          tipo,
+          titulo: periodo === 'month' ? 'Ventas por mes' : 'Ventas por semana',
+          parametros,
+          grafico: filas.length > 2 ? 'lineas' : 'barras',
+          formato: 'bs',
+          serie: filas.map((f) => ({
+            etiqueta: nombre(String(f.periodo)),
+            detalle: `${Number(f.ventas)} ventas, ${Number(f.unidades)} prendas`,
+            valor: Number(f.importe),
+          })),
+          tabla: {
+            encabezados: [
+              periodo === 'month' ? 'Mes' : 'Semana (desde el lunes)',
+              'Ventas',
+              'Unidades',
+              'Importe (Bs)',
+            ],
+            filas: filas.map((f) => [
+              periodo === 'month'
+                ? nombreDeMes(String(f.periodo))
+                : String(f.periodo),
+              Number(f.ventas),
+              Number(f.unidades),
+              bs(f.importe),
+            ]),
+          },
+          totales: resumen[0] ?? {},
+        };
+      }
+
+      case 'ventas_por_categoria': {
+        const [resumen, filas] = await Promise.all([
+          this.repo.resumenDeVentas(rango),
+          this.repo.ventasPorCategoria(rango),
+        ]);
+        const total = filas.reduce((a, f) => a + Number(f.importe), 0);
+        return {
+          tipo,
+          titulo: 'Ingresos por categoria',
+          parametros,
+          grafico: graficoDeParticipacion(filas.length),
+          formato: 'bs',
+          serie: filas.map((f) => ({
+            etiqueta: String(f.categoria),
+            detalle: `${Number(f.unidades)} prendas`,
+            valor: Number(f.importe),
+          })),
+          tabla: {
+            encabezados: [
+              'Categoria',
+              'Ventas',
+              'Unidades',
+              'Importe (Bs)',
+              '% del total',
+            ],
+            filas: filas.map((f) => [
+              String(f.categoria),
+              Number(f.ventas),
+              Number(f.unidades),
+              bs(f.importe),
+              total > 0
+                ? ((Number(f.importe) / total) * 100).toFixed(1)
+                : '0.0',
+            ]),
+          },
+          totales: resumen[0] ?? {},
+        };
+      }
+
       case 'ventas_por_dia': {
         const [resumen, porDia] = await Promise.all([
           this.repo.resumenDeVentas(rango),
@@ -173,7 +435,7 @@ export class ReportesService {
           tipo,
           titulo: 'Ventas por sucursal',
           parametros,
-          grafico: 'barras',
+          grafico: graficoDeParticipacion(porSucursal.length),
           formato: 'bs',
           serie: porSucursal.map((f) => ({
             etiqueta: String(f.sucursal),

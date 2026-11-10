@@ -162,6 +162,11 @@ function Detalle({ id }) {
                 <span className="material-symbols-outlined text-[18px]">receipt</span> Emitir comprobante
               </button>
             )}
+            {!v.cancelada_en && (
+              <Link to={`/panel/cambios/nuevo?venta=${v.id}`} className="btn-secundario no-imprimir">
+                <span className="material-symbols-outlined text-[18px]">swap_horiz</span> Registrar cambio
+              </Link>
+            )}
             {auth.esAdmin && (
               <>
                 <div className="no-imprimir relative">
@@ -192,6 +197,39 @@ function Detalle({ id }) {
         </header>
 
         <ResumenVenta venta={v} fecha={fecha} />
+
+        {v.origen === 'sin_conexion' && (
+          <section className="mt-6 rounded-lg border border-outline-variant bg-surface-container-low p-4 text-sm">
+            <p className="flex items-center gap-2 font-semibold text-on-surface">
+              <span className="material-symbols-outlined text-[18px] text-primary">cloud_sync</span>
+              Registrada sin conexión
+            </p>
+            <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 text-on-surface-variant sm:grid-cols-2">
+              {v.registrada_en_dispositivo && (
+                <div>
+                  <dt className="inline">Hora en el equipo: </dt>
+                  <dd className="inline font-semibold text-on-surface">
+                    {formatoFecha(v.registrada_en_dispositivo, 'dd/MM/yyyy HH:mm')}
+                  </dd>
+                </div>
+              )}
+              {v.sincronizada_en && (
+                <div>
+                  <dt className="inline">Llegó al servidor: </dt>
+                  <dd className="inline font-semibold text-on-surface">
+                    {formatoFecha(v.sincronizada_en, 'dd/MM/yyyy HH:mm')}
+                  </dd>
+                </div>
+              )}
+            </dl>
+            {v.precios_autorizados_por && (
+              <p className="mt-2 text-on-surface-variant">
+                El precio cambió mientras no había conexión: se respetó lo cobrado con autorización del usuario #
+                {v.precios_autorizados_por}.
+              </p>
+            )}
+          </section>
+        )}
 
         {puedeEmitir && v.comprobantes.length > 0 && (
           <section className="no-imprimir mt-6 tarjeta">

@@ -5,9 +5,11 @@ import { Reserva } from '../entities/reserva.entity.js';
 import { Venta } from '../entities/venta.entity.js';
 import { SyncRepository } from '../repositories/sync.repository.js';
 import { SyncService } from '../services/sync.service.js';
+import { ReservasModule } from './reservas.module.js';
+import { VentasModule } from './ventas.module.js';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Reserva, Venta])],
+  imports: [TypeOrmModule.forFeature([Reserva, Venta]), VentasModule, ReservasModule],
   controllers: [SyncController],
   providers: [SyncRepository, SyncService],
 })

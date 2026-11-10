@@ -16,13 +16,23 @@ const formatoEntero = (v) => String(v)
 
 export const EJEMPLOS_IA = [
   'Ventas de este mes por sucursal',
+  'Gráfico de ventas por semana',
+  'Ventas mes a mes de los últimos 6 meses',
+  'Categorías con más ingresos este mes',
+  'Ventas por color de los últimos 3 meses',
+  '¿Qué talla se vende más?',
   'Las 5 prendas más vendidas del mes',
+  '¿Cuánto voy a vender las próximas semanas?',
+  '¿Qué clientes están en riesgo?',
   'Prendas sin stock',
   'Reservas de esta semana',
 ]
 
 export const EJEMPLOS_IA_SUCURSAL = [
   'Ventas de este mes día por día',
+  'Gráfico de ventas por semana',
+  'Categorías con más ingresos este mes',
+  '¿A qué hora se vende más?',
   'Las 5 prendas más vendidas del mes',
   'Prendas sin stock',
   'Reservas de esta semana',
@@ -31,6 +41,19 @@ export const EJEMPLOS_IA_SUCURSAL = [
 const ETIQUETAS = {
   Dia: 'Día',
   Categoria: 'Categoría',
+  Periodo: 'Período',
+  'Stock maximo': 'Stock máximo',
+  'Dia de la semana': 'Día de la semana',
+  Coleccion: 'Colección',
+  Miercoles: 'Miércoles',
+  Sabado: 'Sábado',
+  'Sin coleccion': 'Sin colección',
+  'Ingresos por categoria': 'Ingresos por categoría',
+  'Prediccion de demanda (proximas 4 semanas)': 'Predicción de demanda (próximas 4 semanas)',
+  'Proximas 4 semanas (prediccion)': 'Próximas 4 semanas (predicción)',
+  'Dias desde la ultima compra': 'Días desde la última compra',
+  Recomendacion: 'Recomendación',
+  'Sin categoria': 'Sin categoría',
   'Ventas por dia': 'Ventas por día',
   'Prendas mas vendidas': 'Prendas más vendidas',
   asistio: 'Asistió',
@@ -53,7 +76,8 @@ export function reporteDesdeIa(r) {
     resumen: r.resumen,
     hallazgos: r.hallazgos,
     recomendaciones: r.recomendaciones,
-    sql: r.sql ?? null,
+    /** Lo que se interpretó de la pregunta: [{ etiqueta, valor }]. */
+    filtros: (r.filtros ?? []).map((f) => ({ etiqueta: conTildes(f.etiqueta), valor: conTildes(f.valor) })),
   }
 }
 

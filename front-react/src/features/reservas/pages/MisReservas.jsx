@@ -17,7 +17,9 @@ import { toast } from '@/core/stores/toast.store'
 import { useAuth } from '@/core/stores/auth.store'
 import { describirReserva, useColaReservasStore, useReservasEnCola } from '@/core/offline/cola-reservas.store'
 import { useConexionStore } from '@/core/offline/conexion.store'
+import { copiaUsuario, guardarCopiaUsuario } from '@/core/offline/copia-usuario'
 import Skeleton from '@/shared/components/Skeleton'
+import DetalleEnEspera from '@/shared/components/DetalleEnEspera'
 import EstadoVacio from '@/shared/components/EstadoVacio'
 import ModalConfirmacion from '@/shared/components/ModalConfirmacion'
 import { formatoFecha } from '@/shared/utils/formato'
@@ -36,6 +38,7 @@ function ReservasEnEspera() {
   const sincronizando = useColaReservasStore((s) => s.sincronizando)
   const reintentar = useColaReservasStore((s) => s.reintentar)
   const descartar = useColaReservasStore((s) => s.descartar)
+  const [abierta, setAbierta] = useState(null)
 
   if (enCola.length === 0) return null
 
@@ -44,57 +47,75 @@ function ReservasEnEspera() {
       {enCola.map((r) => {
         const conError = r.estado === 'error'
         const unidades = r.resumen.items.reduce((acc, i) => acc + i.cantidad, 0)
+        const verDetalle = abierta === r.id_cliente
         return (
           <div
             key={r.id_cliente}
             className={cx(
-              'flex flex-col gap-3 rounded-xl border p-4 md:flex-row md:items-center',
+              'overflow-hidden rounded-xl border',
               conError ? 'border-error/40 bg-error/5' : 'border-amber-300 bg-amber-50',
             )}
           >
-            <span
-              className={cx(
-                'material-symbols-outlined text-[28px]',
-                conError ? 'text-error' : 'text-amber-600',
-                !conError && sincronizando && 'animate-spin',
-              )}
-            >
-              {conError ? 'error' : sincronizando ? 'progress_activity' : 'schedule_send'}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="font-semibold text-on-surface">
-                {conError
-                  ? 'No pudimos registrar esta reserva'
-                  : sincronizando
-                    ? 'Enviando tu reserva...'
-                    : 'Reserva en espera de conexión'}
-              </p>
-              <p className="text-sm text-on-surface-variant">
-                {describirReserva(r.resumen)} · {unidades} {unidades === 1 ? 'prenda' : 'prendas'}
-              </p>
-              <p className="mt-1 text-xs text-on-surface-variant">
-                {conError
-                  ? r.error
-                  : enLinea
-                    ? 'Ya hay conexión: se está enviando al servidor.'
-                    : 'Está guardada en este equipo y se enviará sola cuando vuelva la conexión. Te avisaremos al confirmarse.'}
-              </p>
-            </div>
-            {conError && (
+            <div className="flex flex-col gap-3 p-4 md:flex-row md:items-center">
+              <span
+                className={cx(
+                  'material-symbols-outlined text-[28px]',
+                  conError ? 'text-error' : 'text-amber-600',
+                  !conError && sincronizando && 'animate-spin',
+                )}
+              >
+                {conError ? 'error' : sincronizando ? 'progress_activity' : 'schedule_send'}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-on-surface">
+                  {conError
+                    ? 'No pudimos registrar esta reserva'
+                    : sincronizando
+                      ? 'Enviando tu reserva...'
+                      : 'Reserva en espera de conexión'}
+                </p>
+                <p className="text-sm text-on-surface-variant">
+                  {describirReserva(r.resumen)} · {unidades} {unidades === 1 ? 'prenda' : 'prendas'}
+                </p>
+                <p className="mt-1 text-xs text-on-surface-variant">
+                  {conError
+                    ? r.error
+                    : enLinea
+                      ? 'Ya hay conexión: se está enviando al servidor.'
+                      : 'Está guardada en este equipo y se enviará sola cuando vuelva la conexión. Te avisaremos al confirmarse.'}
+                </p>
+              </div>
               <div className="flex gap-2">
                 <button
                   type="button"
                   className="btn-secundario py-1.5"
-                  disabled={!enLinea}
-                  onClick={() => reintentar(r.id_cliente)}
+                  onClick={() => setAbierta(verDetalle ? null : r.id_cliente)}
                 >
-                  Reintentar
+                  {verDetalle ? 'Ocultar' : 'Ver detalle'}
                 </button>
-                <button type="button" className="btn-icono-peligro" title="Descartar" onClick={() => descartar(r.id_cliente)}>
-                  <span className="material-symbols-outlined text-[20px]">delete</span>
-                </button>
+                {conError && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-secundario py-1.5"
+                      disabled={!enLinea}
+                      onClick={() => reintentar(r.id_cliente)}
+                    >
+                      Reintentar
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-icono-peligro"
+                      title="Descartar"
+                      onClick={() => descartar(r.id_cliente)}
+                    >
+                      <span className="material-symbols-outlined text-[20px]">delete</span>
+                    </button>
+                  </>
+                )}
               </div>
-            )}
+            </div>
+            {verDetalle && <DetalleEnEspera items={r.resumen.items} creadaEn={r.creada_en} />}
           </div>
         )
       })}
@@ -119,19 +140,33 @@ export default function MisReservas() {
   const [cancelando, setCancelando] = useState(false)
   const [errorCancelar, setErrorCancelar] = useState(null)
 
+  // Fecha de la copia guardada que se muestra sin conexión (null = datos del servidor).
+  const [copiaDesde, setCopiaDesde] = useState(null)
+
   const pedir = useCallback(() => {
     reservasService
       .listar()
       .then((lista) => reservasService.obtenerVarias(lista.map((r) => r.id)))
       .then((detalles) => {
+        guardarCopiaUsuario('reservas', detalles)
         setReservas(detalles)
         setError(null)
         setSinConexion(false)
+        setCopiaDesde(null)
         setCargando(false)
       })
-      .catch((e) => {
-        setError(e.message)
-        setSinConexion(e.status === 0)
+      .catch(async (e) => {
+        const sinRed = e.status === 0
+        // Sin conexión se muestran las reservas de la última vez que se cargaron en este equipo.
+        const copia = sinRed ? await copiaUsuario('reservas') : null
+        if (copia) {
+          setReservas(copia.datos)
+          setCopiaDesde(copia.guardado_en)
+          setError(null)
+        } else {
+          setError(e.message)
+        }
+        setSinConexion(sinRed)
         setCargando(false)
       })
   }, [])
@@ -249,7 +284,10 @@ export default function MisReservas() {
           const sucursal = sucursalDeReserva(r)
           const unidades = unidadesDeReserva(r)
           return (
-            <li key={r.id} className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-card">
+            <li
+              key={r.id}
+              className="overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest shadow-card"
+            >
               <div className="flex flex-col md:flex-row">
                 <div
                   className={cx(
@@ -258,13 +296,20 @@ export default function MisReservas() {
                   )}
                 >
                   <span className="text-3xl font-bold tabular-nums leading-none">{horaCorta(r.hora)}</span>
-                  <span className="text-xs font-medium capitalize opacity-90">{formatoFecha(r.fecha, 'EEE d MMM')}</span>
+                  <span className="text-xs font-medium capitalize opacity-90">
+                    {formatoFecha(r.fecha, 'EEE d MMM')}
+                  </span>
                 </div>
                 <div className="flex flex-1 flex-col gap-3 p-4 md:flex-row md:items-center">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-semibold text-on-surface">{numeroReserva(r.id)}</p>
-                      <span className={cx('inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold', CHIP_ESTADO[estado])}>
+                      <span
+                        className={cx(
+                          'inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold',
+                          CHIP_ESTADO[estado],
+                        )}
+                      >
                         {ETIQUETA_ESTADO[estado]}
                       </span>
                     </div>
@@ -304,6 +349,8 @@ export default function MisReservas() {
                       <button
                         type="button"
                         className="btn-secundario border-error text-error hover:bg-error/5"
+                        disabled={Boolean(copiaDesde) || !enLinea}
+                        title={copiaDesde || !enLinea ? 'Para cancelar necesitas conexión' : undefined}
                         onClick={() => pedirCancelar(r)}
                       >
                         Cancelar reserva
@@ -356,19 +403,39 @@ export default function MisReservas() {
       <ReservasEnEspera />
 
       <nav className="mb-6 flex gap-6 border-b border-outline-variant" role="tablist">
-        <button type="button" role="tab" className={clasePestana(pestana === 'proximas')} onClick={() => setPestana('proximas')}>
+        <button
+          type="button"
+          role="tab"
+          className={clasePestana(pestana === 'proximas')}
+          onClick={() => setPestana('proximas')}
+        >
           Próximas{' '}
           {!cargando && (
             <span className="ml-1 rounded-full bg-surface-container px-2 py-0.5 text-[11px]">{proximas.length}</span>
           )}
         </button>
-        <button type="button" role="tab" className={clasePestana(pestana === 'historial')} onClick={() => setPestana('historial')}>
+        <button
+          type="button"
+          role="tab"
+          className={clasePestana(pestana === 'historial')}
+          onClick={() => setPestana('historial')}
+        >
           Historial{' '}
           {!cargando && (
             <span className="ml-1 rounded-full bg-surface-container px-2 py-0.5 text-[11px]">{historial.length}</span>
           )}
         </button>
       </nav>
+
+      {copiaDesde && !cargando && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-on-surface">
+          <span className="material-symbols-outlined text-[20px] text-amber-600">cloud_off</span>
+          <p>
+            Sin conexión: estas son tus reservas tal como estaban el {formatoFecha(copiaDesde, 'dd/MM/yyyy HH:mm')}.
+            Pueden haber cambiado; se actualizan solas al volver la conexión.
+          </p>
+        </div>
+      )}
 
       {contenido}
 

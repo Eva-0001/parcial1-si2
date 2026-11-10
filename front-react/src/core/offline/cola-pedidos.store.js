@@ -3,6 +3,9 @@ import { ventasService } from '@/features/ventas/services/ventas.service'
 import { numeroVenta } from '@/features/ventas/ventas.utils'
 import { useAuthStore } from '../stores/auth.store'
 import { toast } from '../stores/toast.store'
+import { anotarEnHistorial } from './historial'
+
+const describirPedido = (r) => `Pedido en línea${r.resumen?.sucursal ? ` de ${r.resumen.sucursal}` : ''}`
 import { ALMACEN_PEDIDOS, idb } from './idb'
 
 /**
@@ -35,13 +38,24 @@ export const useColaPedidosStore = create((set, get) => ({
   },
 
   async descartar(idCliente) {
+    const registro = await idb.obtener(ALMACEN_PEDIDOS, idCliente)
     await idb.borrar(ALMACEN_PEDIDOS, idCliente)
+    if (registro) {
+      await anotarEnHistorial({
+        id_cliente: idCliente,
+        tipo: 'pedido',
+        usuario_id: registro.usuario_id,
+        descripcion: describirPedido(registro),
+        resultado: 'descartada',
+        mensaje: registro.error,
+      })
+    }
     await get().cargar()
   },
 
   async reintentar(idCliente) {
     const registro = await idb.obtener(ALMACEN_PEDIDOS, idCliente)
-    if (registro) await idb.guardar(ALMACEN_PEDIDOS, { ...registro, estado: 'pendiente', error: null })
+    if (registro) await idb.guardar(ALMACEN_PEDIDOS, { ...registro, estado: 'pendiente', error: null, resultado: null })
     await get().cargar()
     return get().sincronizar()
   },
@@ -83,18 +97,44 @@ export const useColaPedidosStore = create((set, get) => ({
           }
 
           await idb.borrar(ALMACEN_PEDIDOS, registro.id_cliente)
+          await anotarEnHistorial({
+            id_cliente: registro.id_cliente,
+            tipo: 'pedido',
+            usuario_id: registro.usuario_id,
+            descripcion: describirPedido(registro),
+            resultado: 'confirmada',
+            servidor_id: ventaId,
+          })
           confirmados++
+          const metodo = registro.payload.metodo_pago
           toast.exito(
-            registro.payload.metodo_pago === 'qr'
+            metodo === 'qr'
               ? `¡Listo! Tu pedido ${numeroVenta(ventaId)} ya llegó a la tienda. Un encargado revisará tu comprobante.`
-              : `¡Listo! Tu pedido ${numeroVenta(ventaId)} ya quedó registrado. Pagas al ${registro.resumen.modalidad === 'domicilio' ? 'recibirlo' : 'retirarlo'}.`,
+              : metodo === 'efectivo'
+                ? `¡Listo! La venta al contado ${numeroVenta(ventaId)} ya quedó registrada.`
+                : `¡Listo! Tu pedido ${numeroVenta(ventaId)} ya quedó registrado. Pagas al ${registro.resumen.modalidad === 'domicilio' ? 'recibirlo' : 'retirarlo'}.`,
           )
         } catch (e) {
           // Sin red, sesión vencida o servidor caído: sigue en espera y se reintenta más tarde.
           if (e.status === 0 || e.status === 401 || e.status >= 500) break
 
           // El servidor lo rechazó (sin stock, límite de pagos pendientes...): queda para que el cliente decida.
-          await idb.guardar(ALMACEN_PEDIDOS, { ...registro, venta_id: ventaId, estado: 'error', error: e.message })
+          const resultado = e.codigo === 'SIN_STOCK' || e.codigo === 'STOCK_INEXISTENTE' ? 'conflicto' : 'rechazada'
+          await idb.guardar(ALMACEN_PEDIDOS, {
+            ...registro,
+            venta_id: ventaId,
+            estado: 'error',
+            resultado,
+            error: e.message,
+          })
+          await anotarEnHistorial({
+            id_cliente: registro.id_cliente,
+            tipo: 'pedido',
+            usuario_id: registro.usuario_id,
+            descripcion: describirPedido(registro),
+            resultado,
+            mensaje: e.message,
+          })
           toast.error(`No pudimos registrar tu pedido de ${registro.resumen.sucursal ?? 'la tienda'}: ${e.message}`)
         }
       }

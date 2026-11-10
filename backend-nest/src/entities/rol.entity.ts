@@ -7,8 +7,12 @@ export class Rol {
   @PrimaryGeneratedColumn({ name: 'id' })
   id: number;
 
-  @Column({ name: 'nombre', type: 'varchar', length: 50, unique: true })
+  @Column({ name: 'nombre', type: 'varchar', length: 50 })
   nombre: string;
+
+  /** Cada empresa tiene sus propios roles; null = rol de la plataforma (superadmin). */
+  @Column({ name: 'empresa_id', type: 'int', nullable: true })
+  empresa_id: number | null;
 
   @OneToMany(() => Usuario, (usuario) => usuario.rol)
   usuarios?: Relation<Usuario>[];

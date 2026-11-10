@@ -47,7 +47,7 @@ export class RolesController {
   ) {
     return this.roles.actualizar(id, datos);
   }
-
+ 
   @Delete(':rol_id')
   @ApiOperation({ summary: 'Eliminar un rol' })
   eliminar(@Param('rol_id', PipeId) id: number) {

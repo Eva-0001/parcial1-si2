@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
+import { comoPlataforma } from '../commons/tenant/contexto-tenant.js';
 import { Reserva } from '../entities/reserva.entity.js';
 import { Rol } from '../entities/rol.entity.js';
 import { Usuario } from '../entities/usuario.entity.js';
@@ -55,16 +56,46 @@ export class UsuariosRepository {
     return this.roles.findOne({ where: { nombre } });
   }
 
+  // Username y correo son unicos en toda la plataforma (el login no pide
+  // empresa), por eso se buscan en todas las empresas.
   usernameOcupado(username: string, excluirId?: number): Promise<boolean> {
-    return this.usuarios.existsBy(
-      excluirId === undefined ? { username } : { username, id: Not(excluirId) },
+    return comoPlataforma(() =>
+      this.usuarios.existsBy(
+        excluirId === undefined
+          ? { username }
+          : { username, id: Not(excluirId) },
+      ),
     );
   }
 
   correoOcupado(correo: string, excluirId?: number): Promise<boolean> {
-    return this.usuarios.existsBy(
-      excluirId === undefined ? { correo } : { correo, id: Not(excluirId) },
+    return comoPlataforma(() =>
+      this.usuarios.existsBy(
+        excluirId === undefined ? { correo } : { correo, id: Not(excluirId) },
+      ),
     );
+  }
+
+  /** Busqueda para el login: en todas las empresas (todavia no hay token). */
+  porUsernameEnPlataforma(username: string): Promise<Usuario | null> {
+    return comoPlataforma(() => this.porUsername(username));
+  }
+
+  /** Datos publicos de la empresa del usuario (para mostrar en el panel). */
+  async empresaPublica(
+    empresaId: number,
+  ): Promise<{ id: number; nombre: string; slug: string } | null> {
+    const filas = await comoPlataforma(() =>
+      this.usuarios.query<{ id: number; nombre: string; slug: string }[]>(
+        'SELECT id, nombre, slug FROM empresas WHERE id = $1',
+        [empresaId],
+      ),
+    );
+    return filas[0] ?? null;
+  }
+
+  obtenerConRolEnPlataforma(id: number): Promise<Usuario | null> {
+    return comoPlataforma(() => this.obtenerConRol(id));
   }
 
   async tieneMovimientos(id: number): Promise<boolean> {

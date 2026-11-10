@@ -84,3 +84,39 @@ export function TablaVentasTurno({ ventas, conEnlace = false }) {
     </div>
   )
 }
+
+/** Ventas cobradas sin conexión en este equipo: cuentan en el arqueo como provisionales. */
+export function TablaVentasPendientes({ ventas }) {
+  return (
+    <div className="tabla overflow-auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Código</th>
+            <th>Hora</th>
+            <th>Unidades</th>
+            <th>Método</th>
+            <th>Estado</th>
+            <th className="text-right">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ventas.map((v) => (
+            <tr key={v.id_cliente}>
+              <td className="font-semibold">{v.id_cliente.slice(0, 8).toUpperCase()}</td>
+              <td className="tabular-nums text-on-surface-variant">{formatoFecha(v.creada_en, 'HH:mm')}</td>
+              <td className="tabular-nums">{v.unidades}</td>
+              <td>{ETIQUETA_METODO[v.metodo_pago] ?? v.metodo_pago}</td>
+              <td>
+                <span className="chip text-warning">
+                  <span className="material-symbols-outlined text-[14px]">schedule_send</span> Sin sincronizar
+                </span>
+              </td>
+              <td className="text-right font-semibold tabular-nums">{monedaBs(v.total)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}

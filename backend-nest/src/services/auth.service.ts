@@ -4,12 +4,25 @@ import {
   randomUUID,
   timingSafeEqual,
 } from 'node:crypto';
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { instanceToPlain } from 'class-transformer';
 import { CodigoError, errorDeNegocio } from '../commons/errores.js';
+import {
+  type ContenidoDelToken,
+  esSuperadmin,
+} from '../commons/guards/jwt-auth.guard.js';
 import { verificarPassword } from '../commons/passwords.js';
+import {
+  comoPlataforma,
+  contextoActual,
+  enEmpresa,
+} from '../commons/tenant/contexto-tenant.js';
 import type { Configuracion } from '../config/configuracion.js';
 import type { LoginDto, RegistroDto } from '../dto/auth.dto.js';
 import type { Sesion } from '../entities/sesion.entity.js';
@@ -23,6 +36,8 @@ export interface RespuestaDeToken {
   token_type: string;
   refresh_token: string;
   usuario: unknown;
+  /** Empresa del usuario; null para el superadmin de la plataforma. */
+  empresa: { id: number; nombre: string; slug: string } | null;
 }
 
 const SESION_INVALIDA = 'La sesion ya no es valida, volve a iniciar sesion';
@@ -41,12 +56,24 @@ export class AuthService {
     this.diasDeRefresco = config.get('jwt', { infer: true }).refrescoEnDias;
   }
 
-  async login(datos: LoginDto): Promise<RespuestaDeToken> {
-    const usuario = await this.repo.porUsername(datos.username);
+  /**
+   * El username es unico en toda la plataforma, asi que el login no necesita
+   * saber la empresa: se busca en todas y el token lleva la del usuario.
+   * Si la tienda mando X-Empresa (empresaExplicita), el usuario tiene que ser
+   * de esa empresa: un cliente de la tienda A no entra por la tienda B.
+   */
+  async login(
+    datos: LoginDto,
+    empresaExplicita?: number,
+  ): Promise<RespuestaDeToken> {
+    const usuario = await this.repo.porUsernameEnPlataforma(datos.username);
 
     if (
       !usuario ||
-      !(await verificarPassword(datos.password, usuario.password))
+      !(await verificarPassword(datos.password, usuario.password)) ||
+      (empresaExplicita !== undefined &&
+        usuario.empresa_id !== empresaExplicita &&
+        !esSuperadmin(usuario))
     ) {
       throw new UnauthorizedException('Usuario o password incorrectos');
     }
@@ -54,7 +81,16 @@ export class AuthService {
     return this.armarToken(usuario);
   }
 
+  /** Registro de clientes: quedan en la empresa de la tienda (X-Empresa). */
   async registro(datos: RegistroDto): Promise<RespuestaDeToken> {
+    const { empresaId } = contextoActual();
+    if (empresaId === null) {
+      throw errorDeNegocio(
+        BadRequestException,
+        CodigoError.EMPRESA_REQUERIDA,
+        'Falta indicar la tienda (cabecera X-Empresa)',
+      );
+    }
     const usuario = await this.usuarios.registrarCliente(datos);
     const conRol = await this.repo.obtenerConRol(usuario.id);
     return this.armarToken(conRol ?? usuario);
@@ -67,7 +103,7 @@ export class AuthService {
       throw this.sesionInvalida();
     }
 
-    const usuario = await this.repo.obtenerConRol(sesion.usuario_id);
+    const usuario = await this.repo.obtenerConRolEnPlataforma(sesion.usuario_id);
     if (!usuario) throw this.sesionInvalida();
 
     return this.armarToken(usuario);
@@ -79,18 +115,32 @@ export class AuthService {
     return { mensaje: 'Sesion cerrada' };
   }
 
+  /** `usuario` tiene que venir con su rol cargado. */
   async armarToken(usuario: Usuario): Promise<RespuestaDeToken> {
-    const access_token = await this.jwt.signAsync({
+    const plataforma = esSuperadmin(usuario);
+    const contenido: ContenidoDelToken = {
       sub: String(usuario.id),
       username: usuario.username,
       rol_id: usuario.rol_id,
-    });
+      empresa_id: plataforma ? null : usuario.empresa_id,
+      plataforma,
+    };
+    const access_token = await this.jwt.signAsync(contenido);
+
+    const enSuContexto = <T>(fn: () => Promise<T>) =>
+      plataforma || usuario.empresa_id === null
+        ? comoPlataforma(fn)
+        : enEmpresa(usuario.empresa_id, fn);
 
     return {
       access_token,
       token_type: 'bearer',
-      refresh_token: await this.abrirSesion(usuario.id),
+      refresh_token: await enSuContexto(() => this.abrirSesion(usuario.id)),
       usuario: instanceToPlain(usuario),
+      empresa:
+        contenido.empresa_id === null
+          ? null
+          : await this.repo.empresaPublica(contenido.empresa_id),
     };
   }
 

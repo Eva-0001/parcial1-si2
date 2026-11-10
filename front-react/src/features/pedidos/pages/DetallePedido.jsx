@@ -6,6 +6,7 @@ import ResumenVenta from '@/features/ventas/components/ResumenVenta'
 import SeguimientoEnvio from '../components/SeguimientoEnvio'
 import ModalCancelarPedido from '../components/ModalCancelarPedido'
 import EstadoPagoQr from '../components/EstadoPagoQr'
+import { copiaUsuario } from '@/core/offline/copia-usuario'
 import Skeleton from '@/shared/components/Skeleton'
 import { monedaBs } from '@/shared/utils/moneda-bs'
 import { formatoFecha } from '@/shared/utils/formato'
@@ -19,12 +20,15 @@ export default function DetallePedido() {
   const [venta, setVenta] = useState(null)
   const [cancelando, setCancelando] = useState(false)
   const [version, setVersion] = useState(0)
+  // Fecha de la copia guardada si se muestra sin conexión.
+  const [copiaDesde, setCopiaDesde] = useState(null)
 
   const [idCargado, setIdCargado] = useState(id)
   if (idCargado !== id) {
     setIdCargado(id)
     setCargando(true)
     setError(null)
+    setCopiaDesde(null)
   }
 
   useEffect(() => {
@@ -32,10 +36,19 @@ export default function DetallePedido() {
       .obtener(Number(id))
       .then((v) => {
         setVenta(v)
+        setCopiaDesde(null)
         setCargando(false)
       })
-      .catch((e) => {
-        setError(e.status === 404 || e.status === 403 ? 'No encontramos ese pedido entre los tuyos.' : e.message)
+      .catch(async (e) => {
+        // Sin conexión: el detalle sale de la copia de "Mis pedidos" guardada en el equipo.
+        const copia = e.status === 0 ? await copiaUsuario('pedidos') : null
+        const guardada = copia?.datos.find((v) => v.id === Number(id))
+        if (guardada) {
+          setVenta(guardada)
+          setCopiaDesde(copia.guardado_en)
+        } else {
+          setError(e.status === 404 || e.status === 403 ? 'No encontramos ese pedido entre los tuyos.' : e.message)
+        }
         setCargando(false)
       })
   }, [id, version])
@@ -78,14 +91,24 @@ export default function DetallePedido() {
           </div>
         </header>
 
-        {v.metodo_pago === 'qr' && v.estado_pago === 'pendiente' && !v.cancelada_en && (
+        {copiaDesde && (
+          <div className="mb-6 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-on-surface">
+            <span className="material-symbols-outlined text-[20px] text-amber-600">cloud_off</span>
+            <p>
+              Sin conexión: así estaba este pedido el {formatoFecha(copiaDesde, 'dd/MM/yyyy HH:mm')}. Para cancelarlo o
+              subir un comprobante necesitas conexión.
+            </p>
+          </div>
+        )}
+
+        {!copiaDesde && v.metodo_pago === 'qr' && v.estado_pago === 'pendiente' && !v.cancelada_en && (
           <EstadoPagoQr venta={v} onEnviado={() => setVersion((n) => n + 1)} />
         )}
 
         {v.envio && (
           <div className="mb-6">
             <SeguimientoEnvio envio={v.envio} />
-            {v.envio.estado === 'pendiente' && (
+            {!copiaDesde && v.envio.estado === 'pendiente' && (
               <div className="no-imprimir mt-3 flex items-center justify-between gap-3 text-sm text-on-surface-variant">
                 <span>Puedes cancelar mientras la tienda no empiece a prepararlo.</span>
                 <button

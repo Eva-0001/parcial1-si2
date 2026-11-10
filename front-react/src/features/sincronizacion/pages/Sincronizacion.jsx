@@ -10,14 +10,28 @@ import ModalConfirmacion from '@/shared/components/ModalConfirmacion'
 import { formatoFecha } from '@/shared/utils/formato'
 import { monedaBs } from '@/shared/utils/moneda-bs'
 import { cx } from '@/shared/utils/clases'
+import RegistroServidor from '../components/RegistroServidor'
+import DatosSinConexion from '../components/DatosSinConexion'
+import EstadoOperacion from '../components/EstadoOperacion'
+import HistorialSync from '../components/HistorialSync'
+import OtrasColas from '../components/OtrasColas'
+import ModalAutorizarPrecio from '../components/ModalAutorizarPrecio'
+import { useColaReservasStore } from '@/core/offline/cola-reservas.store'
+import { useColaPedidosStore } from '@/core/offline/cola-pedidos.store'
 
 /** Ventas cobradas sin conexión que todavía no llegaron al servidor. */
 export default function Sincronizacion() {
   const auth = useAuth()
   const enLinea = useConexionStore((s) => s.enLinea)
-  const { sincronizando, sincronizar, reintentar, descartar } = useColaVentasStore()
+  const { sincronizando, sincronizar: sincronizarVentas, reintentar, descartar, enviando } = useColaVentasStore()
+  const sincronizar = () => {
+    sincronizarVentas()
+    useColaReservasStore.getState().sincronizar()
+    useColaPedidosStore.getState().sincronizar()
+  }
   const ventas = useVentasEnCola(auth.usuario?.id)
   const [aDescartar, setADescartar] = useState(null)
+  const [aAutorizar, setAAutorizar] = useState(null)
 
   const pendientes = ventas.filter((v) => v.estado === 'pendiente')
   const total = ventas.reduce((acc, v) => acc + Number(v.ticket.total), 0)
@@ -36,7 +50,8 @@ export default function Sincronizacion() {
           <div>
             <h1 className="text-2xl font-semibold text-on-surface">Sincronización</h1>
             <p className="text-sm text-on-surface-variant">
-              Ventas del punto de venta cobradas sin conexión. Se envían solas cuando vuelve la red.
+              Lo que se registra sin conexión queda guardado en este equipo y se envía solo, en lote, cuando vuelve la
+              red.
             </p>
           </div>
           <button
@@ -64,6 +79,9 @@ export default function Sincronizacion() {
           )}
         </div>
 
+        <DatosSinConexion />
+
+        <h2 className="mb-3 text-lg font-semibold text-on-surface">Ventas del punto de venta</h2>
         {ventas.length === 0 ? (
           <div className="tarjeta">
             <EstadoVacio
@@ -80,14 +98,7 @@ export default function Sincronizacion() {
                   <div className="min-w-0 flex-1">
                     <p className="flex flex-wrap items-center gap-2 font-semibold text-on-surface">
                       {formatoFecha(v.creada_en, 'dd/MM/yyyy HH:mm')} · {v.ticket.sucursal?.nombre}
-                      <span
-                        className={cx(
-                          'rounded-full px-2 py-0.5 text-[11px] font-semibold',
-                          v.estado === 'error' ? 'bg-error/10 text-error' : 'bg-amber-100 text-amber-800',
-                        )}
-                      >
-                        {v.estado === 'error' ? 'Con error' : v.venta_id ? 'Falta el ticket' : 'Pendiente'}
-                      </span>
+                      <EstadoOperacion registro={v} enviando={enviando.includes(v.id_cliente)} />
                     </p>
                     <p className="text-xs text-on-surface-variant">
                       {v.ticket.unidades} {v.ticket.unidades === 1 ? 'unidad' : 'unidades'} ·{' '}
@@ -101,6 +112,16 @@ export default function Sincronizacion() {
                     <Link to={`/panel/pos/comprobante/local/${v.id_cliente}`} className="btn-icono" title="Ver ticket">
                       <span className="material-symbols-outlined text-[20px]">receipt</span>
                     </Link>
+                    {v.estado === 'error' && v.codigo === 'PRECIO_CAMBIADO' && (
+                      <button
+                        type="button"
+                        className="btn-primario py-1.5"
+                        disabled={!enLinea || sincronizando}
+                        onClick={() => setAAutorizar(v)}
+                      >
+                        Respetar precio cobrado
+                      </button>
+                    )}
                     {v.estado === 'error' && (
                       <button
                         type="button"
@@ -112,7 +133,12 @@ export default function Sincronizacion() {
                       </button>
                     )}
                     {!v.venta_id && (
-                      <button type="button" className="btn-icono-peligro" title="Descartar" onClick={() => setADescartar(v)}>
+                      <button
+                        type="button"
+                        className="btn-icono-peligro"
+                        title="Descartar"
+                        onClick={() => setADescartar(v)}
+                      >
                         <span className="material-symbols-outlined text-[20px]">delete</span>
                       </button>
                     )}
@@ -125,10 +151,16 @@ export default function Sincronizacion() {
 
         <p className="mt-6 text-xs text-on-surface-variant">
           Si una venta falla por falta de stock o de turno abierto, corrige la causa (abre el turno o ajusta el stock) y
-          usa Reintentar. Descartar la borra de este equipo: úsalo solo si el cobro no se concretó.
+          usa Reintentar. Si cambió el precio mientras no había conexión, un administrador o encargado puede autorizar el
+          precio cobrado. Descartar la borra de este equipo: úsalo solo si el cobro no se concretó.
         </p>
+
+        <OtrasColas usuarioId={auth.usuario?.id} />
+        <HistorialSync usuarioId={auth.usuario?.id} />
+        {auth.esAdmin && <RegistroServidor />}
       </div>
 
+      {aAutorizar && <ModalAutorizarPrecio venta={aAutorizar} onCerrar={() => setAAutorizar(null)} />}
       {aDescartar && (
         <ModalConfirmacion
           titulo="¿Descartar esta venta?"

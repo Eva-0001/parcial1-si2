@@ -49,6 +49,13 @@ export class Usuario {
   @Column({ name: 'rol_id', type: 'int' })
   rol_id: number;
 
+  /**
+   * Empresa (tenant) a la que pertenece. La pone PostgreSQL por defecto con la
+   * empresa de la sesion; null solo para el superadmin de la plataforma.
+   */
+  @Column({ name: 'empresa_id', type: 'int', nullable: true })
+  empresa_id: number | null;
+
   @Exclude()
   @Column({ name: 'tipo', type: 'varchar', length: 20, default: 'usuario' })
   tipo: string;

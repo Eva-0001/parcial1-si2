@@ -1,8 +1,9 @@
 import { create } from 'zustand'
-import { reservasService } from '@/features/reservas/services/reservas.service'
 import { useAuthStore } from '../stores/auth.store'
 import { toast } from '../stores/toast.store'
 import { ALMACEN_RESERVAS, idb } from './idb'
+import { enviarLote, esFalloDeEnvio, mensajeDeRechazo, quedoRegistrada } from './sync-lote'
+import { anotarEnHistorial } from './historial'
 
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
@@ -25,6 +26,8 @@ export function describirReserva(resumen) {
 export const useColaReservasStore = create((set, get) => ({
   reservas: [],
   sincronizando: false,
+  /** id_cliente de las reservas que viajan en el lote en curso. */
+  enviando: [],
   /** Se incrementa cada vez que una reserva llega al servidor (para refrescar listas). */
   confirmadas: 0,
 
@@ -43,13 +46,24 @@ export const useColaReservasStore = create((set, get) => ({
   },
 
   async descartar(idCliente) {
+    const registro = await idb.obtener(ALMACEN_RESERVAS, idCliente)
     await idb.borrar(ALMACEN_RESERVAS, idCliente)
+    if (registro) {
+      await anotarEnHistorial({
+        id_cliente: idCliente,
+        tipo: 'reserva',
+        usuario_id: registro.usuario_id,
+        descripcion: `Reserva del ${describirReserva(registro.resumen)}`,
+        resultado: 'descartada',
+        mensaje: registro.error,
+      })
+    }
     await get().cargar()
   },
 
   async reintentar(idCliente) {
     const registro = await idb.obtener(ALMACEN_RESERVAS, idCliente)
-    if (registro) await idb.guardar(ALMACEN_RESERVAS, { ...registro, estado: 'pendiente', error: null })
+    if (registro) await idb.guardar(ALMACEN_RESERVAS, { ...registro, estado: 'pendiente', error: null, resultado: null })
     await get().cargar()
     return get().sincronizar()
   },
@@ -68,24 +82,68 @@ export const useColaReservasStore = create((set, get) => ({
         .filter((r) => r.usuario_id === usuario.id && r.estado === 'pendiente')
         .sort((a, b) => a.creada_en.localeCompare(b.creada_en))
 
+      if (pendientes.length === 0) return
+
+      // Todas en un lote (POST /sync/push); el servidor responde por cada una.
+      let resultados
+      set({ enviando: pendientes.map((r) => r.id_cliente) })
+      try {
+        resultados = await enviarLote(
+          pendientes.map((r) => ({
+            id: r.id_cliente,
+            tipo: 'reserva',
+            intento: (r.intentos ?? 0) + 1,
+            datos: r.payload,
+          })),
+        )
+      } catch (e) {
+        // Sin red, sesión vencida o servidor caído: siguen en espera y se reintenta más tarde.
+        for (const r of pendientes) {
+          await idb.guardar(
+            ALMACEN_RESERVAS,
+            esFalloDeEnvio(e)
+              ? { ...r, intentos: (r.intentos ?? 0) + 1 }
+              : { ...r, estado: 'error', error: e.message },
+          )
+        }
+        return
+      }
+
       for (const registro of pendientes) {
-        try {
-          await reservasService.crear({ ...registro.payload, id_cliente: registro.id_cliente })
+        const r = resultados.get(registro.id_cliente)
+        const descripcion = `Reserva del ${describirReserva(registro.resumen)}`
+        if (quedoRegistrada(r)) {
           await idb.borrar(ALMACEN_RESERVAS, registro.id_cliente)
+          await anotarEnHistorial({
+            id_cliente: registro.id_cliente,
+            tipo: 'reserva',
+            usuario_id: registro.usuario_id,
+            descripcion,
+            resultado: 'confirmada',
+            servidor_id: r.servidor_id,
+          })
           confirmadas++
           toast.exito(`¡Listo! Tu reserva del ${describirReserva(registro.resumen)} ya quedó registrada.`)
-        } catch (e) {
-          // Sin red, sesión vencida o servidor caído: sigue en espera y se reintenta más tarde.
-          if (e.status === 0 || e.status === 401 || e.status >= 500) break
-
+        } else if (r && r.resultado !== 'error') {
           // El servidor la rechazó (fecha pasada, sin stock...): queda para que el cliente decida.
-          await idb.guardar(ALMACEN_RESERVAS, { ...registro, estado: 'error', error: e.message })
-          toast.error(`No pudimos registrar tu reserva del ${describirReserva(registro.resumen)}: ${e.message}`)
+          const motivo = mensajeDeRechazo(r)
+          await idb.guardar(ALMACEN_RESERVAS, { ...registro, estado: 'error', resultado: r.resultado, error: motivo })
+          await anotarEnHistorial({
+            id_cliente: registro.id_cliente,
+            tipo: 'reserva',
+            usuario_id: registro.usuario_id,
+            descripcion,
+            resultado: r.resultado,
+            mensaje: motivo,
+          })
+          toast.error(`No pudimos registrar tu reserva del ${describirReserva(registro.resumen)}: ${motivo}`)
+        } else {
+          await idb.guardar(ALMACEN_RESERVAS, { ...registro, intentos: (registro.intentos ?? 0) + 1 })
         }
       }
     } finally {
       await get().cargar()
-      set((estado) => ({ sincronizando: false, confirmadas: estado.confirmadas + confirmadas }))
+      set((estado) => ({ sincronizando: false, enviando: [], confirmadas: estado.confirmadas + confirmadas }))
     }
   },
 }))

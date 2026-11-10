@@ -267,6 +267,21 @@ export default function PuntoVenta() {
       navigate(ruta, { state: { cobro } })
     }
 
+    // Sin conexión viajan también los precios cobrados y el total: si el precio cambió
+    // mientras tanto, el servidor lo marca como conflicto en vez de cobrar otro monto.
+    const payloadSinConexion = () => {
+      const centavos = (i) => Math.round(Number(precioDe(i)) * 100)
+      return {
+        ...payload,
+        detalles: ticket.map((i) => ({
+          producto_sucursal_id: i.stock.id,
+          cantidad: i.cantidad,
+          precio: (centavos(i) / 100).toFixed(2),
+        })),
+        total: (ticket.reduce((acc, i) => acc + centavos(i) * i.cantidad, 0) / 100).toFixed(2),
+      }
+    }
+
     // Sin conexión con el servidor, la venta se guarda en este equipo y se envía sola después.
     const guardarSinConexion = () =>
       useColaVentasStore
@@ -275,7 +290,7 @@ export default function PuntoVenta() {
           id_cliente: idCliente,
           usuario_id: cajero.id,
           creada_en: new Date().toISOString(),
-          payload,
+          payload: payloadSinConexion(),
           ticket: {
             sucursal: sucursal ? { id: sucursal.id, nombre: sucursal.nombre, ubicacion: sucursal.ubicacion } : null,
             items: ticket.map((i) => ({

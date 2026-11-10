@@ -45,6 +45,7 @@ import type { Usuario } from '../entities/usuario.entity.js';
 import { Venta } from '../entities/venta.entity.js';
 import { VentasRepository } from '../repositories/ventas.repository.js';
 import { ArchivosService } from '../commons/archivos/archivos.service.js';
+import { verificarPassword } from '../commons/passwords.js';
 import { BitacoraService } from './bitacora.service.js';
 import { PagosService } from './pagos.service.js';
 
@@ -190,6 +191,15 @@ export class VentasService {
       const sucursalDespacho = entrega ? this.sucursalUnica(stocks) : null;
 
       const precios = this.preciosDelPedido(pedido, stocks);
+      // Venta hecha sin conexion: se respetan (o se discuten) los precios que se cobraron.
+      const autorizadoPor = await this.aplicarPreciosCobrados(
+        manager,
+
+        datos,
+        actor,
+        precios,
+        stocks,
+      );
       let totalCentavos = costoEnvio;
       for (const [stockId, cantidad] of pedido) {
         totalCentavos += subtotalEnCentavos(
@@ -217,6 +227,8 @@ export class VentasService {
           estado_pago: pagoPendiente ? EstadoPago.PENDIENTE : EstadoPago.PAGADO,
           turno_id: turno?.id ?? null,
           id_cliente: datos.id_cliente ?? null,
+          origen: turno && datos.registrada_en ? 'sin_conexion' : 'en_linea',
+          precios_autorizados_por: autorizadoPor,
         }),
       );
 
@@ -308,6 +320,10 @@ export class VentasService {
           `LEAST(now()::timestamp, GREATEST(
              (SELECT abierto_en FROM turnos_caja WHERE id = :turnoId),
              CAST(:registradaEn AS timestamptz)::timestamp))`,
+        // La hora del equipo tal cual, y cuando llego al servidor.
+        registrada_en_dispositivo: () =>
+          `CAST(:registradaEn AS timestamptz)::timestamp`,
+        sincronizada_en: () => 'now()::timestamp',
       })
       .where('id = :ventaId', { ventaId })
       .setParameters({
@@ -687,6 +703,128 @@ export class VentasService {
       );
     }
     return [...sucursales][0];
+  }
+
+  /**
+   * Precios de una venta registrada sin conexion. Si el equipo mando el precio de cada
+   * linea, el total tiene que cuadrar con ellas, y si alguna no coincide con el precio
+   * vigente la venta queda en conflicto (PRECIO_CAMBIADO), salvo que un administrador o
+   * encargado pida respetar lo cobrado. En ese caso se usan los precios del equipo y
+   * precio_lista conserva el del servidor. Devuelve quien autorizo, si hizo falta.
+   */
+  private async aplicarPreciosCobrados(
+    manager: EntityManager,
+    datos: CrearVentaDto,
+    actor: Usuario,
+    precios: Map<number, PrecioAplicado>,
+    stocks: Map<number, ProductoSucursal>,
+  ): Promise<number | null> {
+    const conPrecio = datos.detalles.filter((d) => d.precio !== undefined);
+    if (conPrecio.length === 0) return null;
+    if (conPrecio.length !== datos.detalles.length) {
+      throw new BadRequestException(
+        'Si se envian los precios cobrados, tienen que venir en todas las lineas',
+      );
+    }
+
+    const cobrados = new Map<number, string>();
+    for (const linea of datos.detalles) {
+      const precio = deCentavos(aCentavos(linea.precio!));
+      const previo = cobrados.get(linea.producto_sucursal_id);
+      if (previo !== undefined && previo !== precio) {
+        throw new BadRequestException(
+          'Una misma prenda no puede venir con dos precios distintos',
+        );
+      }
+      cobrados.set(linea.producto_sucursal_id, precio);
+    }
+
+    if (datos.total !== undefined) {
+      const suma = datos.detalles.reduce(
+        (acc, d) =>
+          acc +
+          subtotalEnCentavos(cobrados.get(d.producto_sucursal_id)!, d.cantidad),
+        0,
+      );
+      if (suma !== aCentavos(datos.total)) {
+        throw errorDeNegocio(
+          BadRequestException,
+          CodigoError.TOTAL_INCONSISTENTE,
+          `El total cobrado (Bs ${datos.total}) no coincide con la suma de las prendas (Bs ${deCentavos(suma)})`,
+        );
+      }
+    }
+
+    const diferencias = [...cobrados]
+      .filter(([stockId, precio]) => precios.get(stockId)!.precio !== precio)
+      .map(([stockId, precio]) => ({
+        producto_sucursal_id: stockId,
+        producto: stocks.get(stockId)?.producto?.nombre ?? null,
+        cobrado: precio,
+        actual: precios.get(stockId)!.precio,
+      }));
+    if (diferencias.length === 0) return null;
+
+    if (!datos.respetar_precios) {
+      const lista = diferencias
+        .map(
+          (d) =>
+            `${d.producto ?? 'Prenda'}: se cobro Bs ${d.cobrado}, hoy vale Bs ${d.actual}`,
+        )
+        .join('; ');
+      throw new ConflictException({
+        detail: `El precio cambio mientras no habia conexion. ${lista}`,
+        codigo: CodigoError.PRECIO_CAMBIADO,
+        precios: diferencias,
+      });
+    }
+    const autorizador = await this.supervisorQueAutoriza(manager, datos, actor);
+    for (const d of diferencias) {
+      const aplicado = precios.get(d.producto_sucursal_id)!;
+      precios.set(d.producto_sucursal_id, {
+        ...aplicado,
+        precio: d.cobrado,
+        por_mayor: aCentavos(d.cobrado) < aCentavos(aplicado.precio_lista),
+      });
+    }
+    return autorizador;
+  }
+
+  /**
+   * Quien autoriza respetar un precio distinto: el mismo vendedor si es administrador
+   * o encargado o, si no, un supervisor que escribe su usuario y contrasena en el
+   * equipo del cajero (no se guarda: viaja solo en ese envio). RLS limita la busqueda
+   * a la empresa de la sesion.
+   */
+  private async supervisorQueAutoriza(
+    manager: EntityManager,
+    datos: CrearVentaDto,
+    actor: Usuario,
+  ): Promise<number> {
+    const supervisores: readonly string[] = [Rol.ADMINISTRADOR, Rol.ENCARGADO];
+    if (supervisores.includes(actor.rol?.nombre ?? '')) return actor.id;
+
+    const credenciales = datos.autorizacion;
+    if (credenciales) {
+      const filas: { id: number; password: string; rol: string }[] =
+        await manager.query(
+          `SELECT u.id, u.password, r.nombre AS rol
+           FROM usuarios u JOIN roles r ON r.id = u.rol_id
+          WHERE u.username = $1`,
+          [credenciales.username],
+        );
+      const supervisor = filas[0];
+      if (
+        supervisor &&
+        supervisores.includes(supervisor.rol) &&
+        (await verificarPassword(credenciales.password, supervisor.password))
+      ) {
+        return supervisor.id;
+      }
+    }
+    throw new ForbiddenException(
+      'Para respetar un precio distinto al de lista hace falta la autorizacion de un administrador o encargado',
+    );
   }
 
   private agruparPorStock(detalles: DetalleDeVentaDto[]): Map<number, number> {

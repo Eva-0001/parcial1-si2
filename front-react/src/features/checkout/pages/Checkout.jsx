@@ -26,7 +26,7 @@ const ROLES_CONTADO = ['administrador', 'cajero']
 
 const PATRON_TELEFONO = /^\+?\d{6,15}$/
 
-// Pedidos por QR o contraentrega: si el servidor no responde en 10 s, quedan en espera en el equipo.
+// Pedidos al contado, por QR o contraentrega: si el servidor no responde en 10 s, quedan en espera en el equipo.
 const ESPERA_SERVIDOR_MS = 10_000
 
 // La entrega se guarda antes de ir a Stripe: si el banco redirige (3D Secure), se recupera al volver.
@@ -257,7 +257,8 @@ export default function Checkout() {
     if (e.status === 409 && pagoId) {
       return `${e.message} El cobro de prueba quedó hecho pero la venta no se registró: avisa al comercio con el código ${pagoId}.`
     }
-    if (e.status === 409) {
+    // Otros 409 (límite de pedidos QR o contraentrega pendientes) no se arreglan con las cantidades.
+    if (e.status === 409 && e.message.startsWith('Stock insuficiente')) {
       return `${e.message}. Ajusta las cantidades en el carrito e intenta de nuevo.`
     }
     return e.message
@@ -317,8 +318,9 @@ export default function Checkout() {
       ...(metodoPago ? { metodo_pago: metodoPago } : {}),
       ...(presencial ? {} : { entrega: entregaParaApi() }),
     }
-    // QR y contraentrega no dependen de la pasarela: si no hay conexión, se guardan para después.
-    const encolable = !presencial && !pagoId
+    // Al contado, QR y contraentrega no dependen de la pasarela: si no hay conexión, se guardan
+    // para después. La tarjeta no: el cobro ya ocurrió en Stripe y necesita registrarse en el momento.
+    const encolable = !pagoId
     const idCliente = encolable ? nuevoUuid() : null
 
     ventasService

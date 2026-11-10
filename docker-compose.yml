@@ -46,6 +46,11 @@ services:
       SEED_FORZAR: ${SEED_FORZAR:-false}
       SEED_PASSWORD: ${SEED_PASSWORD:-demo1234}
 
+      # Multiempresa: superadmin de la plataforma y tienda por defecto (movil).
+      PLATAFORMA_USERNAME: ${PLATAFORMA_USERNAME:-superadmin}
+      PLATAFORMA_PASSWORD: ${PLATAFORMA_PASSWORD:-demo1234}
+      EMPRESA_POR_DEFECTO: ${EMPRESA_POR_DEFECTO:-fashionstore}
+
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_MONEDA: ${STRIPE_MONEDA:-usd}
       STRIPE_TASA_BOB: ${STRIPE_TASA_BOB:-6.96}
@@ -70,6 +75,7 @@ services:
         # el navegador solo necesita el puerto del frontend.
         VITE_API_URL: ${VITE_API_URL:-/api}
         VITE_STRIPE_PUBLISHABLE_KEY: ${VITE_STRIPE_PUBLISHABLE_KEY:-}
+        VITE_EMPRESA: ${VITE_EMPRESA:-fashionstore}
     restart: unless-stopped
     depends_on:
       - api

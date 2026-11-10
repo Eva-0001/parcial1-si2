@@ -1,6 +1,29 @@
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router'
-import { useAuth, useAuthStore } from '@/core/stores/auth.store'
+import { useAuth, useAuthStore, useEmpresa } from '@/core/stores/auth.store'
+import { useSuscripcionStore } from '@/core/stores/suscripcion.store'
+import { http } from '@/core/api/http'
+import { estaEnLinea } from '@/core/offline/conexion.store'
+import { descargarParaSinConexion, ultimaDescarga } from '@/core/offline/datos-locales'
+import { cajaService } from '@/features/caja/services/caja.service'
+
+const HORAS_PARA_REDESCARGAR = 12
+
+/** Una vez por sesión: deja el catálogo en IndexedDB para poder trabajar sin conexión. */
+function descargarSiHaceFalta() {
+  try {
+    if (sessionStorage.getItem('datos_sin_conexion_revisados')) return
+    sessionStorage.setItem('datos_sin_conexion_revisados', '1')
+  } catch {
+    return
+  }
+  const ultima = ultimaDescarga()
+  const vieja = !ultima || Date.now() - new Date(ultima.fecha).getTime() > HORAS_PARA_REDESCARGAR * 3600_000
+  if (!estaEnLinea()) return
+  // El turno abierto se recuerda para seguir cobrando sin conexión dentro del mismo turno.
+  cajaService.turnoActual().catch(() => {})
+  if (vieja) descargarParaSinConexion(http).catch(() => {})
+}
 import { useVentasEnCola } from '@/core/offline/cola-ventas.store'
 import { cx } from '@/shared/utils/clases'
 
@@ -22,6 +45,7 @@ const MENUS = {
         { icono: 'analytics', etiqueta: 'Inventario global', ruta: '/panel/inventario' },
         { icono: 'warehouse', etiqueta: 'Almacenes', ruta: '/panel/almacenes' },
         { icono: 'receipt_long', etiqueta: 'Ventas', ruta: '/panel/ventas' },
+        { icono: 'swap_horiz', etiqueta: 'Cambios de prendas', ruta: '/panel/cambios' },
         { icono: 'local_shipping', etiqueta: 'Pedidos online', ruta: '/panel/pedidos' },
         { icono: 'point_of_sale', etiqueta: 'Punto de venta', ruta: '/panel/pos' },
         { icono: 'account_balance_wallet', etiqueta: 'Mi caja', ruta: '/panel/caja' },
@@ -29,12 +53,21 @@ const MENUS = {
         { icono: 'cloud_sync', etiqueta: 'Sincronización', ruta: '/panel/sincronizacion' },
         { icono: 'confirmation_number', etiqueta: 'Comprobantes', ruta: '/panel/comprobantes' },
         { icono: 'history', etiqueta: 'Bitácora', ruta: '/panel/bitacora' },
-        { icono: 'psychology', etiqueta: 'Reportes con IA', ruta: '/panel/reportes' },
+        {
+          icono: 'psychology',
+          etiqueta: 'Reportes con IA',
+          ruta: '/panel/reportes',
+          funcion: 'reportes_ia',
+          // Sin IA en el plan, el administrador igual tiene los reportes convencionales.
+          sinFuncion: { icono: 'bar_chart', etiqueta: 'Reportes' },
+        },
+        { icono: 'model_training', etiqueta: 'Analítica inteligente', ruta: '/panel/analitica' },
       ],
     },
     {
       titulo: 'Sistema',
       items: [
+        { icono: 'workspace_premium', etiqueta: 'Mi plan', ruta: '/panel/mi-plan' },
         { icono: 'group', etiqueta: 'Usuarios', ruta: '/panel/usuarios' },
         { icono: 'security', etiqueta: 'Roles', ruta: '/panel/roles' },
         { icono: 'badge', etiqueta: 'Trabajadores', ruta: '/panel/trabajadores' },
@@ -52,8 +85,10 @@ const MENUS = {
         { icono: 'inventory_2', etiqueta: 'Stock de mi sucursal', ruta: '/panel/stock' },
         { icono: 'warehouse', etiqueta: 'Almacenes', ruta: '/panel/almacenes' },
         { icono: 'receipt_long', etiqueta: 'Ventas de mi sucursal', ruta: '/panel/ventas-sucursal' },
+        { icono: 'swap_horiz', etiqueta: 'Cambios de prendas', ruta: '/panel/cambios' },
         { icono: 'schedule', etiqueta: 'Turnos y arqueos', ruta: '/panel/turnos' },
-        { icono: 'psychology', etiqueta: 'Reportes con IA', ruta: '/panel/reportes' },
+        { icono: 'psychology', etiqueta: 'Reportes con IA', ruta: '/panel/reportes', funcion: 'reportes_ia' },
+        { icono: 'model_training', etiqueta: 'Analítica inteligente', ruta: '/panel/analitica' },
       ],
     },
   ],
@@ -62,11 +97,21 @@ const MENUS = {
       titulo: null,
       items: [
         { icono: 'point_of_sale', etiqueta: 'Punto de venta', ruta: '/panel/pos' },
+        { icono: 'swap_horiz', etiqueta: 'Cambios de prendas', ruta: '/panel/cambios' },
         { icono: 'local_shipping', etiqueta: 'Pedidos online', ruta: '/panel/pedidos' },
         { icono: 'account_balance_wallet', etiqueta: 'Mi caja', ruta: '/panel/caja' },
         { icono: 'schedule', etiqueta: 'Mis turnos', ruta: '/panel/turnos' },
         { icono: 'cloud_sync', etiqueta: 'Sincronización', ruta: '/panel/sincronizacion' },
-        { icono: 'psychology', etiqueta: 'Reportes con IA', ruta: '/panel/reportes' },
+        { icono: 'psychology', etiqueta: 'Reportes con IA', ruta: '/panel/reportes', funcion: 'reportes_ia' },
+      ],
+    },
+  ],
+  superadmin: [
+    {
+      titulo: 'Plataforma SaaS',
+      items: [
+        { icono: 'domain', etiqueta: 'Empresas', ruta: '/plataforma' },
+        { icono: 'workspace_premium', etiqueta: 'Planes', ruta: '/plataforma/planes' },
       ],
     },
   ],
@@ -83,6 +128,19 @@ const ETIQUETAS_ROL = {
   encargado: 'Encargado',
   cajero: 'Cajero',
   proveedor: 'Proveedor',
+  superadmin: 'Superadmin',
+}
+
+/** Quita (o cambia) los ítems que el plan de la empresa no incluye. */
+function segunPlan(secciones, plan) {
+  if (!plan) return secciones
+  return secciones.map((seccion) => ({
+    ...seccion,
+    items: seccion.items.flatMap((item) => {
+      if (!item.funcion || plan[item.funcion]) return [item]
+      return item.sinFuncion ? [{ ...item, ...item.sinFuncion }] : []
+    }),
+  }))
 }
 
 export default function LayoutPanel() {
@@ -92,7 +150,23 @@ export default function LayoutPanel() {
 
   const [colapsada, setColapsada] = useState(auth.esCajero)
 
-  const secciones = MENUS[auth.rol ?? ''] ?? []
+  const empresa = useEmpresa()
+  const suscripcion = useSuscripcionStore((s) => s.datos)
+  const cargarSuscripcion = useSuscripcionStore((s) => s.cargar)
+  const usuarioId = auth.usuario?.id
+  const esSuperadmin = auth.esSuperadmin
+  useEffect(() => {
+    if (usuarioId && !esSuperadmin) cargarSuscripcion({ forzar: true })
+  }, [usuarioId, esSuperadmin, cargarSuscripcion])
+
+  const personalDeTienda = auth.tieneRol('administrador', 'encargado', 'cajero')
+  useEffect(() => {
+    if (usuarioId && personalDeTienda) descargarSiHaceFalta()
+  }, [usuarioId, personalDeTienda])
+
+  const secciones = segunPlan(MENUS[auth.rol ?? ''] ?? [], suscripcion?.plan)
+  const nombreMarca = auth.esSuperadmin ? 'FashionStore SaaS' : (empresa?.nombre ?? 'FashionStore')
+  const inicio = auth.esSuperadmin ? '/plataforma' : '/panel'
   const etiquetaRol = auth.rol ? (ETIQUETAS_ROL[auth.rol] ?? auth.rol) : ''
   const u = auth.usuario
   const iniciales = u ? `${u.nombre.charAt(0)}${u.apellido.charAt(0)}`.toUpperCase() : ''
@@ -120,13 +194,13 @@ export default function LayoutPanel() {
           colapsada ? 'w-[72px] px-2' : 'w-[260px] px-4',
         )}
       >
-        <Link to="/panel" className="mb-6 flex items-center gap-3 px-2">
+        <Link to={inicio} className="mb-6 flex items-center gap-3 px-2">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary shadow-card">
             <span className="material-symbols-outlined text-white">storefront</span>
           </div>
           {!colapsada && (
             <div>
-              <h1 className="text-base font-bold leading-tight text-primary">FashionStore</h1>
+              <h1 className="text-base font-bold leading-tight text-primary">{nombreMarca}</h1>
               <p className="text-xs text-on-surface-variant">{etiquetaRol}</p>
             </div>
           )}
@@ -145,7 +219,7 @@ export default function LayoutPanel() {
                   <NavLink
                     key={item.ruta}
                     to={item.ruta}
-                    end={item.ruta === '/panel'}
+                    end={item.ruta === '/panel' || item.ruta === '/plataforma'}
                     className={({ isActive }) =>
                       cx(
                         'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary',
@@ -209,13 +283,15 @@ export default function LayoutPanel() {
             >
               <span className="material-symbols-outlined">menu</span>
             </button>
-            <Link
-              to="/"
-              className="hidden items-center gap-1 text-xs text-on-surface-variant hover:text-primary sm:flex"
-            >
-              <span className="material-symbols-outlined text-[16px]">storefront</span>
-              Ver tienda
-            </Link>
+            {!auth.esSuperadmin && (
+              <Link
+                to="/"
+                className="hidden items-center gap-1 text-xs text-on-surface-variant hover:text-primary sm:flex"
+              >
+                <span className="material-symbols-outlined text-[16px]">storefront</span>
+                Ver tienda
+              </Link>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -246,12 +322,52 @@ export default function LayoutPanel() {
           </div>
         </header>
 
+        {!auth.esSuperadmin && <AvisoSuscripcion suscripcion={suscripcion} esAdmin={auth.esAdmin} />}
+
         <main className="flex-1 overflow-x-hidden p-6">
           <Suspense fallback={null}>
             <Outlet />
           </Suspense>
         </main>
       </div>
+    </div>
+  )
+}
+
+/** Franja de aviso cuando la suscripción vence pronto, venció o la empresa está suspendida. */
+function AvisoSuscripcion({ suscripcion, esAdmin }) {
+  if (!suscripcion) return null
+  const { estado, dias_restantes: dias } = suscripcion
+
+  let texto = null
+  let grave = true
+  if (estado === 'empresa_suspendida') {
+    texto = 'La empresa está suspendida: no se pueden hacer operaciones.'
+  } else if (estado === 'vencida' || estado === 'sin_suscripcion') {
+    texto = 'La suscripción venció: el sistema quedó en modo solo consulta hasta renovar el plan.'
+  } else if (dias !== null && dias <= 7) {
+    grave = false
+    texto = dias === 0 ? 'La suscripción vence hoy.' : `La suscripción vence en ${dias} día(s).`
+  }
+  if (!texto) return null
+
+  return (
+    <div
+      className={cx(
+        'no-imprimir flex items-center justify-between gap-3 border-b px-6 py-2 text-sm',
+        grave ? 'border-error/30 bg-error/5 text-error' : 'border-primary/30 bg-primary/5 text-primary',
+      )}
+      role="alert"
+    >
+      <span className="flex items-center gap-2">
+        <span className="material-symbols-outlined text-[18px]">{grave ? 'error' : 'schedule'}</span>
+        {texto}
+      </span>
+      {esAdmin && estado !== 'empresa_suspendida' && (
+        <Link to="/panel/mi-plan" className="font-semibold underline">
+          Ver mi plan
+        </Link>
+      )}
     </div>
   )
 }

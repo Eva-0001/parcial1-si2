@@ -3,6 +3,8 @@ import { InicioPanel, RequireAuth, RequireRol, SoloInvitado } from './guards/gua
 import Raiz from './Raiz'
 import {
   AlmacenDetalle,
+  Analitica,
+  Cambios,
   Almacenes,
   Bitacora,
   Catalogo,
@@ -19,6 +21,8 @@ import {
   Login,
   MiCaja,
   MiPerfil,
+  MiPlan,
+  NuevoCambio,
   ModeloForm,
   MisProductos,
   MisPedidos,
@@ -26,6 +30,8 @@ import {
   NuevaReserva,
   PedidoOnlineDetalle,
   PedidosOnline,
+  PlataformaEmpresas,
+  PlataformaPlanes,
   ProductosAdmin,
   PromocionesAdmin,
   PromocionesPublica,
@@ -33,6 +39,7 @@ import {
   PuntoVenta,
   Proveedores,
   Registro,
+  RegistroEmpresa,
   ReportesVoz,
   ReservasSucursal,
   Roles,
@@ -107,7 +114,9 @@ export const router = createBrowserRouter([
             ),
           },
           { path: 'bitacora', element: conRol(['administrador'], <Bitacora />) },
+          { path: 'mi-plan', element: conRol(['administrador'], <MiPlan />) },
           { path: 'reportes', element: conRol(['administrador', 'encargado', 'cajero'], <ReportesVoz />) },
+          { path: 'analitica', element: conRol(['administrador', 'encargado'], <Analitica />) },
 
           { path: 'catalogos', element: conRol(['administrador'], <Catalogos />) },
           { path: 'roles', element: conRol(['administrador'], <Roles />) },
@@ -189,6 +198,14 @@ export const router = createBrowserRouter([
             ],
           },
           { path: 'ventas-sucursal', element: conRol(['encargado', 'administrador'], <VentasSucursal />) },
+          {
+            path: 'cambios',
+            element: <RequireRol roles={['administrador', 'encargado', 'cajero']} />,
+            children: [
+              { index: true, element: <Cambios /> },
+              { path: 'nuevo', element: <NuevoCambio /> },
+            ],
+          },
           { path: 'comprobantes', element: conRol(['administrador', 'encargado', 'cajero'], <Comprobantes />) },
 
           {
@@ -219,6 +236,22 @@ export const router = createBrowserRouter([
       },
 
       {
+        path: 'plataforma',
+        element: (
+          <RequireAuth>
+            <RequireRol roles={['superadmin']}>
+              <LayoutPanel />
+            </RequireRol>
+          </RequireAuth>
+        ),
+        children: [
+          { index: true, element: <PlataformaEmpresas /> },
+          { path: 'planes', element: <PlataformaPlanes /> },
+          { path: '*', element: <NoEncontrado /> },
+        ],
+      },
+
+      {
         path: 'login',
         element: (
           <SoloInvitado>
@@ -231,6 +264,14 @@ export const router = createBrowserRouter([
         element: (
           <SoloInvitado>
             <Registro />
+          </SoloInvitado>
+        ),
+      },
+      {
+        path: 'registro-empresa',
+        element: (
+          <SoloInvitado>
+            <RegistroEmpresa />
           </SoloInvitado>
         ),
       },

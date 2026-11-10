@@ -103,6 +103,8 @@ async function redPrimero(request, nombreCache) {
   const cache = await caches.open(nombreCache)
   try {
     const respuesta = await conTiempoLimite(fetch(request), ESPERA_RED_MS)
+    // nginx responde 502/503/504 (HTML) si la API está caída: se usa la copia guardada.
+    if (caidaDelServidor(respuesta)) throw new Error('API caída')
     if (respuesta.ok) cache.put(request, respuesta.clone())
     return respuesta
   } catch {
@@ -147,6 +149,14 @@ async function recortar(cache, maximo) {
   for (const clave of claves.slice(0, Math.max(0, claves.length - maximo))) {
     await cache.delete(clave)
   }
+}
+
+// Misma regla que esCaidaDelServidor() de la app: los 502/503 propios de la API llegan en JSON.
+function caidaDelServidor(respuesta) {
+  return (
+    [502, 503, 504].includes(respuesta.status) &&
+    !(respuesta.headers.get('content-type') ?? '').includes('application/json')
+  )
 }
 
 function conTiempoLimite(promesa, ms) {

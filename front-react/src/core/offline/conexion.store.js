@@ -13,9 +13,22 @@ const ESPERA_PULSO_MS = 5_000
 export const useConexionStore = create((set) => ({
   enLinea: true,
   actualizacion: null,
+  /**
+   * Fecha más antigua de los datos guardados que se están mostrando sin conexión
+   * (pueden estar desactualizados). Se limpia al volver la conexión.
+   */
+  datosDesde: null,
 
   marcar(enLinea) {
-    set((estado) => (estado.enLinea === enLinea ? estado : { enLinea }))
+    set((estado) =>
+      estado.enLinea === enLinea ? estado : { enLinea, datosDesde: enLinea ? null : estado.datosDesde },
+    )
+  },
+
+  usarDatosGuardados(fecha) {
+    set((estado) => ({
+      datosDesde: estado.datosDesde && estado.datosDesde < fecha ? estado.datosDesde : fecha,
+    }))
   },
 
   /** Service worker nuevo esperando a que el usuario acepte actualizar. */
@@ -29,12 +42,22 @@ export const marcarConexion = (enLinea) => useConexionStore.getState().marcar(en
 export const estaEnLinea = () => useConexionStore.getState().enLinea
 
 /**
+ * El proxy (nginx) responde 502/503/504 en HTML cuando la API está caída o reiniciándose:
+ * para la app es lo mismo que no tener conexión. Los 502/503 de la propia API (pagos, IA)
+ * llegan en JSON y siguen siendo errores normales.
+ */
+export function esCaidaDelServidor(status, tipoContenido) {
+  return [502, 503, 504].includes(status) && !String(tipoContenido ?? '').includes('application/json')
+}
+
+/**
  * Pregunta a la API si responde. `GET /` no pasa por la cache del service worker, así que
- * mide el servidor real. Cualquier respuesta HTTP cuenta como "con conexión".
+ * mide el servidor real. Cualquier respuesta HTTP de la API cuenta como "con conexión".
  */
 export async function comprobarConexion() {
   try {
-    await fetch(`${env.apiUrl}/`, { cache: 'no-store', signal: AbortSignal.timeout(ESPERA_PULSO_MS) })
+    const r = await fetch(`${env.apiUrl}/`, { cache: 'no-store', signal: AbortSignal.timeout(ESPERA_PULSO_MS) })
+    if (esCaidaDelServidor(r.status, r.headers.get('content-type'))) throw new Error('API caída')
     marcarConexion(true)
     return true
   } catch {

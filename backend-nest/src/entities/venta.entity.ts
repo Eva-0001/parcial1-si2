@@ -110,6 +110,28 @@ export class Venta {
   @Column({ name: 'turno_id', type: 'int', nullable: true })
   turno_id: number | null;
 
+  /** 'en_linea' o 'sin_conexion' (registrada en un equipo sin red y sincronizada despues). */
+  @Column({ name: 'origen', type: 'varchar', length: 20, default: 'en_linea' })
+  origen: 'en_linea' | 'sin_conexion';
+
+  /** Hora real que informo el equipo, tal cual (creada_en se acota al turno). */
+  @Transform(({ value }) => aIsoSinZona(value), { toPlainOnly: true })
+  @Column({
+    name: 'registrada_en_dispositivo',
+    type: 'timestamp',
+    nullable: true,
+  })
+  registrada_en_dispositivo: Date | null;
+
+  /** Cuando llego al servidor una venta hecha sin conexion. */
+  @Transform(({ value }) => aIsoSinZona(value), { toPlainOnly: true })
+  @Column({ name: 'sincronizada_en', type: 'timestamp', nullable: true })
+  sincronizada_en: Date | null;
+
+  /** Quien autorizo respetar el precio cobrado sin conexion cuando el de lista cambio. */
+  @Column({ name: 'precios_autorizados_por', type: 'int', nullable: true })
+  precios_autorizados_por: number | null;
+
   @Transform(({ value }) => aIsoSinZona(value), { toPlainOnly: true })
   @Index('ix_ventas_creada_en')
   @CreateDateColumn({ name: 'creada_en', type: 'timestamp' })

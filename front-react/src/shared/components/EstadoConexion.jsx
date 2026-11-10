@@ -11,6 +11,7 @@ export default function EstadoConexion() {
   const auth = useAuth()
   const enLinea = useConexionStore((s) => s.enLinea)
   const actualizacion = useConexionStore((s) => s.actualizacion)
+  const datosDesde = useConexionStore((s) => s.datosDesde)
   const sincronizandoVentas = useColaVentasStore((s) => s.sincronizando)
   const sincronizandoReservas = useColaReservasStore((s) => s.sincronizando)
   const sincronizando = sincronizandoVentas || sincronizandoReservas
@@ -60,7 +61,11 @@ export default function EstadoConexion() {
               {enLinea ? (sincronizando ? 'Sincronizando...' : 'Conexión restablecida') : 'Sin conexión'}
             </p>
             <p className="text-xs opacity-80">
-              {!enLinea && 'Ves los datos guardados; lo que registres se guarda y se envía solo al volver la conexión. '}
+              {!enLinea &&
+                (datosDesde
+                  ? `Ves los datos guardados el ${new Date(datosDesde).toLocaleString('es-BO', { dateStyle: 'short', timeStyle: 'short' })}: precios y stock pueden estar desactualizados. `
+                  : 'Ves los datos guardados; pueden estar desactualizados. ')}
+              {!enLinea && 'Lo que registres se guarda y se envía solo al volver la conexión. '}
               {pendientes > 0 && `${pendientes} ${pendientes === 1 ? 'venta pendiente' : 'ventas pendientes'}. `}
               {reservasEnEspera > 0 &&
                 `${reservasEnEspera} ${reservasEnEspera === 1 ? 'reserva en espera' : 'reservas en espera'}. `}

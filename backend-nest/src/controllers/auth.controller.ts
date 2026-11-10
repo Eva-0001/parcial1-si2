@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Req,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -12,7 +13,10 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { SinVerificarSuscripcion } from '../commons/decorators/plan.decorator.js';
+import { TambienPlataforma } from '../commons/decorators/plataforma.decorator.js';
 import { Publico } from '../commons/decorators/publico.decorator.js';
+import type { PeticionConEmpresa } from '../commons/tenant/tenant.middleware.js';
 import { UsuarioActual } from '../commons/decorators/usuario-actual.decorator.js';
 import {
   LoginDto,
@@ -33,8 +37,8 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Iniciar sesion y obtener el token JWT' })
   @ApiResponse({ status: 200, type: TokenDto })
-  login(@Body() datos: LoginDto) {
-    return this.auth.login(datos);
+  login(@Body() datos: LoginDto, @Req() peticion: PeticionConEmpresa) {
+    return this.auth.login(datos, peticion.empresaExplicita);
   }
 
   @Publico()
@@ -65,6 +69,8 @@ export class AuthController {
   }
 
   @ApiBearerAuth()
+  @TambienPlataforma()
+  @SinVerificarSuscripcion()
   @Get('me')
   @ApiOperation({ summary: 'Datos del usuario autenticado' })
   yo(@UsuarioActual() usuario: Usuario) {

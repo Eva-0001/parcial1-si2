@@ -2,13 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { EJEMPLOS, EJEMPLOS_IA, EJEMPLOS_IA_SUCURSAL, armarReporte, reporteDesdeIa } from '../reportes.utils'
 import { reportesIaService } from '../services/reportes-ia.service'
 import { tableroService } from '@/features/tablero/services/tablero.service'
-import { useAuth } from '@/core/stores/auth.store'
+import { useAuth, useEmpresa } from '@/core/stores/auth.store'
+import { exportarPdf as generarPdf, exportarXlsx } from '../exportar-reporte'
+import { useTieneFuncion } from '@/core/stores/suscripcion.store'
 import { useReferencias } from '@/core/stores/referencias.store'
 import { toast } from '@/core/stores/toast.store'
 import GraficoBarras from '@/shared/components/GraficoBarras'
 import GraficoLineas from '@/shared/components/GraficoLineas'
-import { crearReconocimiento, descargarCsv, mensajeErrorDeVoz, motivoSinVoz } from '@/shared/utils/voz'
-import { hoyISO } from '@/shared/utils/fechas'
+import GraficoTorta from '@/shared/components/GraficoTorta'
+import { crearReconocimiento, mensajeErrorDeVoz, motivoSinVoz } from '@/shared/utils/voz'
 import { cx } from '@/shared/utils/clases'
 import { useNivelMicrofono } from '@/shared/hooks/useNivelMicrofono'
 
@@ -17,6 +19,8 @@ export default function ReportesVoz() {
   const { esAdmin, esEncargado, esCajero } = useAuth()
   const deSucursal = esEncargado || esCajero
   const modoSinIa = esAdmin ? 'local' : 'sin-ia'
+  // Plan sin reportes generativos: solo los reportes convencionales.
+  const planConIa = useTieneFuncion('reportes_ia')
 
   const [modo, setModo] = useState('verificando')
 
@@ -26,6 +30,10 @@ export default function ReportesVoz() {
   const [tipoReporte, setTipoReporte] = useState(null)
 
   const [reporteIa, setReporteIa] = useState(null)
+  /** La IA no pudo armar el reporte con certeza: pide aclarar y sugiere pedidos. */
+  const [aclaracion, setAclaracion] = useState(null)
+  /** En participaciones se puede pasar de torta a barras. */
+  const [vistaGrafico, setVistaGrafico] = useState('torta')
 
   const [pregunta, setPregunta] = useState('')
   const [escuchando, setEscuchando] = useState(false)
@@ -33,6 +41,8 @@ export default function ReportesVoz() {
   const resumenMicrofono = microfono.resumen
   const [transcripcion, setTranscripcion] = useState('')
   const [generando, setGenerando] = useState(false)
+  const [exportando, setExportando] = useState(null)
+  const empresa = useEmpresa()
 
   const reconocimiento = useRef(null)
   const temporizador = useRef(null)
@@ -43,15 +53,13 @@ export default function ReportesVoz() {
 
   useEffect(() => {
     let vigente = true
-    reportesIaService
-      .estado()
-      .then((e) => vigente && setModo(e.habilitado ? 'ia' : modoSinIa))
-      .catch(() => vigente && setModo(modoSinIa))
+    const estadoIa = planConIa ? reportesIaService.estado() : Promise.resolve({ habilitado: false })
+    estadoIa.then((e) => vigente && setModo(e.habilitado ? 'ia' : modoSinIa)).catch(() => vigente && setModo(modoSinIa))
     return () => {
       vigente = false
       clearTimeout(temporizador.current)
     }
-  }, [modoSinIa])
+  }, [modoSinIa, planConIa])
 
   useEffect(() => {
     if (modo !== 'local') return
@@ -71,31 +79,45 @@ export default function ReportesVoz() {
     }, 500)
   }, [])
 
-  const generarConIa = useCallback(async (texto) => {
-    const id = ++ultimoPedido.current
-    setTranscripcion(texto)
-    setGenerando(true)
-    try {
-      const r = await reportesIaService.generar(texto)
-      if (id === ultimoPedido.current) setReporteIa(reporteDesdeIa(r))
-    } catch (e) {
-      if (id !== ultimoPedido.current) return
-      if (e.status === 503) {
-        toast.info(
-          esAdmin
-            ? 'La IA no está disponible en el servidor. Pasamos a los reportes básicos.'
-            : 'La IA no está disponible en el servidor.',
-        )
-        setModo(modoSinIa)
-      } else if (e.status === 422 || e.status === 429) {
-        toast.advertencia(e.message)
-      } else {
-        toast.error(e.message)
+  const generarConIa = useCallback(
+    async (texto) => {
+      const id = ++ultimoPedido.current
+      setTranscripcion(texto)
+      setGenerando(true)
+      try {
+        const r = await reportesIaService.generar(texto)
+        if (id !== ultimoPedido.current) return
+        if (r.tipo === 'aclaracion') {
+          setReporteIa(null)
+          setAclaracion({ mensaje: r.mensaje, sugerencias: r.sugerencias ?? [] })
+        } else {
+          setAclaracion(null)
+          setVistaGrafico('torta')
+          setReporteIa(reporteDesdeIa(r))
+        }
+      } catch (e) {
+        if (id !== ultimoPedido.current) return
+        if (e.codigo === 'FUNCION_NO_INCLUIDA') {
+          toast.info('Tu plan no incluye reportes con IA. Pasamos a los reportes básicos.')
+          setModo(modoSinIa)
+        } else if (e.status === 503) {
+          toast.info(
+            esAdmin
+              ? 'La IA no está disponible en el servidor. Pasamos a los reportes básicos.'
+              : 'La IA no está disponible en el servidor.',
+          )
+          setModo(modoSinIa)
+        } else if (e.status === 422 || e.status === 429) {
+          toast.advertencia(e.message)
+        } else {
+          toast.error(e.message)
+        }
+      } finally {
+        if (id === ultimoPedido.current) setGenerando(false)
       }
-    } finally {
-      if (id === ultimoPedido.current) setGenerando(false)
-    }
-  }, [esAdmin, modoSinIa])
+    },
+    [esAdmin, modoSinIa],
+  )
 
   const pedir = useCallback(
     (texto) => {
@@ -183,13 +205,19 @@ export default function ReportesVoz() {
     setPregunta('')
   }
 
-  const exportarPdf = () => {
-    if (typeof window !== 'undefined') window.print()
-  }
-
-  const exportarExcel = () => {
-    if (!reporte) return
-    descargarCsv(`${reporte.tipo}-${hoyISO()}.csv`, reporte.encabezados, reporte.filas)
+  const exportar = async (formato) => {
+    if (!reporte || exportando) return
+    setExportando(formato)
+    try {
+      const opciones = { empresa: empresa?.nombre ?? 'FashionStore' }
+      if (formato === 'pdf') await generarPdf(reporte, opciones)
+      else await exportarXlsx(reporte, opciones)
+    } catch (e) {
+      console.error('[Reportes] no se pudo exportar:', e)
+      toast.error('No se pudo generar el archivo. Intenta de nuevo.')
+    } finally {
+      setExportando(null)
+    }
   }
 
   const bloqueado =
@@ -238,7 +266,10 @@ export default function ReportesVoz() {
           <div className="mt-3 w-full max-w-xs" aria-live="polite">
             <div className="h-2 overflow-hidden rounded-full bg-surface-container">
               <div
-                className={cx('h-full rounded-full transition-[width] duration-75', microfono.nivel > 0.05 ? 'bg-success' : 'bg-outline-variant')}
+                className={cx(
+                  'h-full rounded-full transition-[width] duration-75',
+                  microfono.nivel > 0.05 ? 'bg-success' : 'bg-outline-variant',
+                )}
                 style={{ width: `${Math.round(microfono.nivel * 100)}%` }}
               ></div>
             </div>
@@ -248,7 +279,9 @@ export default function ReportesVoz() {
           </div>
         )}
         {transcripcion && (
-          <p className="mt-3 rounded-full bg-surface-container px-4 py-1.5 text-sm italic text-primary">"{transcripcion}"</p>
+          <p className="mt-3 rounded-full bg-surface-container px-4 py-1.5 text-sm italic text-primary">
+            "{transcripcion}"
+          </p>
         )}
 
         {conIa && (
@@ -296,6 +329,29 @@ export default function ReportesVoz() {
           <span className="material-symbols-outlined animate-spin text-primary">progress_activity</span>
           {conIa ? 'Analizando tu pregunta y generando el reporte...' : 'Generando el reporte...'}
         </div>
+      ) : conIa && aclaracion && !reporte ? (
+        <section className="tarjeta" role="status">
+          <p className="flex items-center gap-2 text-sm font-semibold text-on-surface">
+            <span className="material-symbols-outlined text-[20px] text-primary">help</span>
+            Necesito que me precises el pedido
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-on-surface-variant">{aclaracion.mensaje}</p>
+          {aclaracion.sugerencias.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {aclaracion.sugerencias.map((texto) => (
+                <button
+                  key={texto}
+                  type="button"
+                  className="rounded-full border border-primary/40 bg-surface-container-lowest px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+                  disabled={bloqueado}
+                  onClick={() => pedir(texto)}
+                >
+                  {texto}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
       ) : (
         reporte && (
           <article className="tarjeta">
@@ -305,17 +361,49 @@ export default function ReportesVoz() {
                   {conIa ? 'Reporte generado con IA' : 'Reporte generado'}
                 </p>
                 <h2 className="text-xl font-semibold text-on-surface">{reporte.titulo}</h2>
-                <p className="text-sm text-on-surface-variant">{reporte.subtitulo}</p>
+                {!reporte.filtros?.length && <p className="text-sm text-on-surface-variant">{reporte.subtitulo}</p>}
               </div>
               <div className="no-imprimir flex gap-2">
-                <button type="button" className="btn-secundario" onClick={exportarPdf}>
-                  <span className="material-symbols-outlined text-[18px]">picture_as_pdf</span> PDF
+                <button
+                  type="button"
+                  className="btn-secundario"
+                  onClick={() => exportar('pdf')}
+                  disabled={exportando !== null}
+                >
+                  <span className="material-symbols-outlined text-[18px]">picture_as_pdf</span>
+                  {exportando === 'pdf' ? 'Generando...' : 'PDF'}
                 </button>
-                <button type="button" className="btn-secundario" onClick={exportarExcel}>
-                  <span className="material-symbols-outlined text-[18px]">table_view</span> Excel
+                <button
+                  type="button"
+                  className="btn-secundario"
+                  onClick={() => exportar('xlsx')}
+                  disabled={exportando !== null}
+                >
+                  <span className="material-symbols-outlined text-[18px]">table_view</span>
+                  {exportando === 'xlsx' ? 'Generando...' : 'Excel'}
                 </button>
               </div>
             </header>
+
+            {reporte.filtros?.length > 0 && (
+              <section className="mb-5 rounded-lg border border-outline-variant bg-surface-container-low p-3">
+                <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+                  <span className="material-symbols-outlined text-[16px]">filter_alt</span>
+                  Lo que entendí de tu pedido
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {reporte.filtros.map((f) => (
+                    <span
+                      key={f.etiqueta}
+                      className="inline-flex items-center gap-1 rounded-full border border-outline-variant bg-surface-container-lowest px-3 py-1 text-xs"
+                    >
+                      <span className="text-on-surface-variant">{f.etiqueta}:</span>
+                      <span className="font-semibold text-on-surface">{f.valor}</span>
+                    </span>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {reporte.resumen && (
               <section className="mb-6 space-y-4">
@@ -327,17 +415,42 @@ export default function ReportesVoz() {
               </section>
             )}
 
-            {reporte.sql && (
-              <details className="no-imprimir mb-6 rounded-lg bg-surface-container-low p-3 text-sm">
-                <summary className="cursor-pointer font-semibold text-on-surface-variant">Ver consulta SQL generada</summary>
-                <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs text-on-surface">{reporte.sql}</pre>
-              </details>
-            )}
-
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
               <div className={reporte.grafico === 'lineas' ? 'lg:col-span-12' : 'lg:col-span-5'}>
+                {reporte.grafico === 'torta' && (
+                  <div className="no-imprimir mb-4 flex justify-end">
+                    <div
+                      className="inline-flex rounded-lg border border-outline-variant p-0.5"
+                      role="group"
+                      aria-label="Tipo de gráfico"
+                    >
+                      {[
+                        { clave: 'torta', icono: 'donut_large', texto: 'Torta' },
+                        { clave: 'barras', icono: 'bar_chart', texto: 'Barras' },
+                      ].map((o) => (
+                        <button
+                          key={o.clave}
+                          type="button"
+                          aria-pressed={vistaGrafico === o.clave}
+                          className={cx(
+                            'inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
+                            vistaGrafico === o.clave
+                              ? 'bg-primary text-white'
+                              : 'text-on-surface-variant hover:text-on-surface',
+                          )}
+                          onClick={() => setVistaGrafico(o.clave)}
+                        >
+                          <span className="material-symbols-outlined text-[16px]">{o.icono}</span>
+                          {o.texto}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {reporte.grafico === 'lineas' ? (
                   <GraficoLineas datos={reporte.serie} formato={reporte.formato} />
+                ) : reporte.grafico === 'torta' && vistaGrafico === 'torta' ? (
+                  <GraficoTorta datos={reporte.serie} formato={reporte.formato} />
                 ) : (
                   <GraficoBarras datos={reporte.serie} formato={reporte.formato} />
                 )}
@@ -359,7 +472,10 @@ export default function ReportesVoz() {
                   <tbody>
                     {reporte.filas.length === 0 ? (
                       <tr>
-                        <td colSpan={reporte.encabezados.length} className="py-8 text-center text-sm text-on-surface-variant">
+                        <td
+                          colSpan={reporte.encabezados.length}
+                          className="py-8 text-center text-sm text-on-surface-variant"
+                        >
                           Sin datos para este reporte.
                         </td>
                       </tr>

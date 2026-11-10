@@ -8,6 +8,12 @@ import { ALMACEN_VENTAS, idb } from './idb'
 import { useConexionStore } from './conexion.store'
 import { useColaReservasStore } from './cola-reservas.store'
 import { useColaPedidosStore } from './cola-pedidos.store'
+import { enviarLote, esFalloDeEnvio, mensajeDeRechazo, quedoRegistrada } from './sync-lote'
+import { anotarEnHistorial } from './historial'
+import { monedaBs } from '@/shared/utils/moneda-bs'
+
+const describirVenta = (r) =>
+  `Venta de ${monedaBs(r.ticket?.total ?? 0)}${r.ticket?.sucursal?.nombre ? ` en ${r.ticket.sucursal.nombre}` : ''}`
 
 const INTERVALO_REINTENTO_MS = 20_000
 const CLAVE_SINCRONIZADAS = 'ventas_sincronizadas'
@@ -18,11 +24,17 @@ const MAX_RECORDADAS = 50
  * devuelve la misma venta si llega dos veces, así que reintentar nunca la duplica.
  *
  * Registro: { id_cliente, usuario_id, creada_en, estado: 'pendiente' | 'error', error,
+ *             resultado: 'rechazada' | 'conflicto' (si estado = 'error'), intentos,
  *             venta_id, payload (cuerpo de POST /ventas), ticket (datos para imprimir) }
+ *
+ * Estados que ve el usuario: local (sin intentos), enviando (en el lote en curso),
+ * reintentando (falló el envío), rechazada / conflicto, y confirmada (en el historial).
  */
 export const useColaVentasStore = create((set, get) => ({
   ventas: [],
   sincronizando: false,
+  /** id_cliente de las ventas que viajan en el lote en curso. */
+  enviando: [],
 
   async cargar() {
     try {
@@ -39,19 +51,47 @@ export const useColaVentasStore = create((set, get) => ({
   },
 
   async descartar(idCliente) {
+    const registro = await idb.obtener(ALMACEN_VENTAS, idCliente)
     await idb.borrar(ALMACEN_VENTAS, idCliente)
+    if (registro) {
+      await anotarEnHistorial({
+        id_cliente: idCliente,
+        tipo: 'venta',
+        usuario_id: registro.usuario_id,
+        descripcion: describirVenta(registro),
+        resultado: 'descartada',
+        mensaje: registro.error,
+      })
+    }
     await get().cargar()
+  },
+
+  /**
+   * Conflicto de precio: reenvía la venta pidiendo respetar lo cobrado. Si quien opera no
+   * es administrador ni encargado, un supervisor escribe su usuario y contraseña; esos
+   * datos viajan solo en este envío y no se guardan en el equipo.
+   */
+  async autorizarPrecios(idCliente, autorizacion = null) {
+    const registro = await idb.obtener(ALMACEN_VENTAS, idCliente)
+    if (!registro) return null
+    await idb.guardar(ALMACEN_VENTAS, { ...registro, estado: 'pendiente', error: null })
+    await get().cargar()
+    await get().sincronizar({ [idCliente]: { respetar_precios: true, ...(autorizacion ? { autorizacion } : {}) } })
+    return idb.obtener(ALMACEN_VENTAS, idCliente)
   },
 
   async reintentar(idCliente) {
     const registro = await idb.obtener(ALMACEN_VENTAS, idCliente)
-    if (registro) await idb.guardar(ALMACEN_VENTAS, { ...registro, estado: 'pendiente', error: null })
+    if (registro) await idb.guardar(ALMACEN_VENTAS, { ...registro, estado: 'pendiente', error: null, resultado: null })
     await get().cargar()
     return get().sincronizar()
   },
 
-  /** Envía en orden las ventas pendientes del usuario actual. */
-  async sincronizar() {
+  /**
+   * Envía las ventas pendientes del usuario actual en un solo lote (POST /sync/push)
+   * y después emite el ticket de cada una que quedó registrada.
+   */
+  async sincronizar(extras = {}) {
     if (get().sincronizando) return
     const usuario = useAuthStore.getState().usuario
     if (!usuario) return
@@ -61,41 +101,100 @@ export const useColaVentasStore = create((set, get) => ({
     let conErrores = 0
 
     try {
-      const pendientes = (await idb.todos(ALMACEN_VENTAS))
-        .filter((r) => r.usuario_id === usuario.id && r.estado === 'pendiente')
-        .sort((a, b) => a.creada_en.localeCompare(b.creada_en))
+      const deUsuario = async () =>
+        (await idb.todos(ALMACEN_VENTAS))
+          .filter((r) => r.usuario_id === usuario.id && r.estado === 'pendiente')
+          .sort((a, b) => a.creada_en.localeCompare(b.creada_en))
 
-      for (const registro of pendientes) {
+      // 1. Registrar en el servidor, en un lote, las que todavía no tienen venta.
+      const sinRegistrar = (await deUsuario()).filter((r) => !r.venta_id)
+      if (sinRegistrar.length > 0) {
+        let resultados
+        set({ enviando: sinRegistrar.map((r) => r.id_cliente) })
         try {
-          let venta
-          if (registro.venta_id) {
-            venta = await ventasService.obtener(registro.venta_id)
-          } else {
-            venta = await ventasService.crear({
-              ...registro.payload,
-              id_cliente: registro.id_cliente,
-              registrada_en: registro.creada_en,
-            })
-            // Si el ticket falla, el próximo intento no vuelve a crear la venta.
-            await idb.guardar(ALMACEN_VENTAS, { ...registro, venta_id: venta.id })
+          resultados = await enviarLote(
+            sinRegistrar.map((r) => ({
+              id: r.id_cliente,
+              tipo: 'venta',
+              sucursal_id: r.ticket?.sucursal?.id ?? undefined,
+              intento: (r.intentos ?? 0) + 1,
+              datos: { ...r.payload, registrada_en: r.creada_en, ...(extras[r.id_cliente] ?? {}) },
+            })),
+          )
+        } catch (e) {
+          // Sin red, sesión vencida o servidor caído: se reintenta más tarde.
+          for (const r of sinRegistrar) {
+            await idb.guardar(
+              ALMACEN_VENTAS,
+              esFalloDeEnvio(e)
+                ? { ...r, intentos: (r.intentos ?? 0) + 1 }
+                : { ...r, estado: 'error', error: e.message },
+            )
           }
+          if (!esFalloDeEnvio(e)) conErrores += sinRegistrar.length
+          return
+        }
 
+        for (const registro of sinRegistrar) {
+          const r = resultados.get(registro.id_cliente)
+          if (quedoRegistrada(r)) {
+            // Si el ticket falla, el próximo intento no vuelve a crear la venta.
+            await idb.guardar(ALMACEN_VENTAS, { ...registro, venta_id: r.servidor_id })
+          } else if (r && r.resultado !== 'error') {
+            // Rechazo del negocio o conflicto de stock: queda para revisar a mano.
+            // El stock que tenía apartado en la vista se libera solo (ver unidadesEnColaPorStock).
+            const motivo = mensajeDeRechazo(r)
+            // Si falló la autorización del precio, sigue siendo un conflicto de precio.
+            const autorizacionFallida = extras[registro.id_cliente] && registro.codigo === 'PRECIO_CAMBIADO'
+            await idb.guardar(ALMACEN_VENTAS, {
+              ...registro,
+              estado: 'error',
+              resultado: autorizacionFallida ? 'conflicto' : r.resultado,
+              codigo: autorizacionFallida ? registro.codigo : (r.codigo ?? null),
+              precios: autorizacionFallida ? registro.precios : (r.precios ?? null),
+              error: motivo,
+            })
+            await anotarEnHistorial({
+              id_cliente: registro.id_cliente,
+              tipo: 'venta',
+              usuario_id: registro.usuario_id,
+              descripcion: describirVenta(registro),
+              resultado: r.resultado,
+              mensaje: motivo,
+            })
+            conErrores++
+          } else {
+            await idb.guardar(ALMACEN_VENTAS, { ...registro, intentos: (registro.intentos ?? 0) + 1 })
+          }
+        }
+      }
+
+      // 2. Emitir el ticket de las ya registradas.
+      for (const registro of (await deUsuario()).filter((r) => r.venta_id)) {
+        try {
+          const venta = await ventasService.obtener(registro.venta_id)
           await emitirTicket(venta)
           await idb.borrar(ALMACEN_VENTAS, registro.id_cliente)
+          await anotarEnHistorial({
+            id_cliente: registro.id_cliente,
+            tipo: 'venta',
+            usuario_id: registro.usuario_id,
+            descripcion: describirVenta(registro),
+            resultado: 'confirmada',
+            servidor_id: venta.id,
+          })
           recordarSincronizada(registro.id_cliente, venta.id)
           hechas++
         } catch (e) {
-          // Sin red, sesión vencida o servidor caído: se corta y se reintenta más tarde.
-          if (e.status === 0 || e.status === 401 || e.status >= 500) break
-
-          // Rechazo del negocio (sin stock, sin turno abierto...): queda para revisar a mano.
+          // La venta ya está registrada; solo falta el ticket: se reintenta más tarde.
+          if (esFalloDeEnvio(e)) break
           await idb.guardar(ALMACEN_VENTAS, { ...registro, estado: 'error', error: e.message })
           conErrores++
         }
       }
     } finally {
       await get().cargar()
-      set({ sincronizando: false })
+      set({ sincronizando: false, enviando: [] })
     }
 
     if (hechas > 0) {
@@ -106,7 +205,10 @@ export const useColaVentasStore = create((set, get) => ({
       )
     }
     if (conErrores > 0) {
-      toast.error(`${conErrores} venta(s) sin conexión no se pudieron registrar: revísalas en Sincronización`)
+      toast.error(
+        `${conErrores} venta(s) sin conexión no se pudieron registrar: revísalas en Sincronización. ` +
+          'Su stock apartado se liberó.',
+      )
     }
   },
 }))
@@ -121,7 +223,8 @@ export function useVentasEnCola(usuarioId) {
 export function unidadesEnColaPorStock(ventas) {
   const mapa = new Map()
   for (const v of ventas) {
-    if (v.venta_id) continue
+    // Ya registrada (el servidor la descontó) o rechazada (rollback: deja de apartar stock).
+    if (v.venta_id || v.estado === 'error') continue
     for (const d of v.payload.detalles) {
       mapa.set(d.producto_sucursal_id, (mapa.get(d.producto_sucursal_id) ?? 0) + d.cantidad)
     }

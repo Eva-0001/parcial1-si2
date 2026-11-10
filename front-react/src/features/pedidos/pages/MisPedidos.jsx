@@ -13,6 +13,7 @@ import { ESTADO_ENVIO, ETIQUETA_MODALIDAD } from '../envios.utils'
 import PedidosEnEspera from '../components/PedidosEnEspera'
 import { useColaPedidosStore } from '@/core/offline/cola-pedidos.store'
 import { useConexionStore } from '@/core/offline/conexion.store'
+import { copiaUsuario, guardarCopiaUsuario } from '@/core/offline/copia-usuario'
 import Skeleton from '@/shared/components/Skeleton'
 import EstadoVacio from '@/shared/components/EstadoVacio'
 import { monedaBs } from '@/shared/utils/moneda-bs'
@@ -34,20 +35,34 @@ export default function MisPedidos() {
   const confirmados = useColaPedidosStore((s) => s.confirmados)
   const enLinea = useConexionStore((s) => s.enLinea)
   const [sinConexion, setSinConexion] = useState(false)
+  // Fecha de la copia guardada que se muestra sin conexión (null = datos del servidor).
+  const [copiaDesde, setCopiaDesde] = useState(null)
 
   const pedir = useCallback(() => {
     ventasService
       .listar()
       .then((lista) => ventasService.obtenerVarias(lista.map((v) => v.id)))
       .then((detalles) => {
-        setVentas([...detalles].sort((a, b) => b.id - a.id))
+        const ordenadas = [...detalles].sort((a, b) => b.id - a.id)
+        guardarCopiaUsuario('pedidos', ordenadas)
+        setVentas(ordenadas)
         setError(null)
         setSinConexion(false)
+        setCopiaDesde(null)
         setCargando(false)
       })
-      .catch((e) => {
-        setError(e.message)
-        setSinConexion(e.status === 0)
+      .catch(async (e) => {
+        const sinRed = e.status === 0
+        // Sin conexión se muestran los pedidos de la última vez que se cargaron en este equipo.
+        const copia = sinRed ? await copiaUsuario('pedidos') : null
+        if (copia) {
+          setVentas(copia.datos)
+          setCopiaDesde(copia.guardado_en)
+          setError(null)
+        } else {
+          setError(e.message)
+        }
+        setSinConexion(sinRed)
         setCargando(false)
       })
   }, [])
@@ -83,7 +98,7 @@ export default function MisPedidos() {
         <span className="material-symbols-outlined text-[40px] text-on-surface-variant">cloud_off</span>
         <h3 className="mt-2 text-lg font-semibold text-on-surface">Estás sin conexión</h3>
         <p className="max-w-md text-sm text-on-surface-variant">
-          Tus pedidos se mostrarán cuando vuelva la conexión. Mientras tanto puedes comprar pagando por QR o
+          Tus pedidos se mostrarán cuando vuelva la conexión. Mientras tanto puedes comprar al contado, por QR o
           contraentrega: el pedido quedará en espera y se enviará solo.
         </p>
       </div>
@@ -227,6 +242,15 @@ export default function MisPedidos() {
       </div>
 
       <PedidosEnEspera />
+      {copiaDesde && !cargando && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-on-surface">
+          <span className="material-symbols-outlined text-[20px] text-amber-600">cloud_off</span>
+          <p>
+            Sin conexión: estos son tus pedidos tal como estaban el {formatoFecha(copiaDesde, 'dd/MM/yyyy HH:mm')}. Pueden
+            haber cambiado; se actualizan solos al volver la conexión.
+          </p>
+        </div>
+      )}
       {contenido}
     </>
   )

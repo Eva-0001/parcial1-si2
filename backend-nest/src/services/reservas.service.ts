@@ -1,3 +1,4 @@
+import { enEmpresa } from '../commons/tenant/contexto-tenant.js';
 import {
   BadRequestException,
   ConflictException,
@@ -45,8 +46,10 @@ export class ReservasService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleInit(): void {
+    // Fuera de una peticion no hay empresa en el contexto: la limpieza recorre
+    // las empresas y libera las vencidas de cada una dentro de su propio tenant.
     this.limpieza = setInterval(() => {
-      this.liberarVencidas().catch((error: unknown) =>
+      this.liberarVencidasDeTodas().catch((error: unknown) =>
         this.logger.error(
           'No se pudieron liberar las reservas vencidas',
           error,
@@ -153,6 +156,12 @@ export class ReservasService implements OnModuleInit, OnModuleDestroy {
     });
 
     return { mensaje: 'Reserva cancelada' };
+  }
+
+  private async liberarVencidasDeTodas(): Promise<void> {
+    for (const empresaId of await this.repo.idsDeEmpresasActivas()) {
+      await enEmpresa(empresaId, () => this.liberarVencidas());
+    }
   }
 
   async liberarVencidas(): Promise<number> {

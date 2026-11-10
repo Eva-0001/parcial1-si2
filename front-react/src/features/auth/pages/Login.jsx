@@ -31,8 +31,10 @@ export default function Login() {
     setError(null)
 
     try {
-      await authService.login(valores)
-      navigate(destino())
+      const res = await authService.login(valores)
+      // Usuario de otra empresa: se recarga para no mezclar datos de dos tiendas.
+      if (res.cambioDeTienda) window.location.assign(destino())
+      else navigate(destino())
     } catch (e) {
       setError(e.status === 401 ? 'Usuario o contraseña incorrectos' : e.message)
       setCargando(false)
@@ -114,6 +116,12 @@ export default function Login() {
         ¿No tienes cuenta?{' '}
         <Link to="/registro" className="font-semibold text-primary hover:underline">
           Regístrate
+        </Link>
+      </p>
+      <p className="mt-3 text-center text-sm text-on-surface-variant">
+        ¿Tienes una tienda de ropa?{' '}
+        <Link to="/registro-empresa" className="font-semibold text-primary hover:underline">
+          Registra tu empresa
         </Link>
       </p>
     </PanelAuth>

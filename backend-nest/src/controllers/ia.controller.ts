@@ -7,6 +7,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { RequiereFuncion } from '../commons/decorators/plan.decorator.js';
 import { Publico } from '../commons/decorators/publico.decorator.js';
 import { Roles } from '../commons/decorators/roles.decorator.js';
 import { UsuarioActual } from '../commons/decorators/usuario-actual.decorator.js';
@@ -52,6 +53,7 @@ export class IaController {
   }
 
   @Roles(...CAPACIDAD.reportes)
+  @RequiereFuncion('reportes_ia')
   @ApiBearerAuth()
   @Post('reportes')
   @HttpCode(HttpStatus.OK)

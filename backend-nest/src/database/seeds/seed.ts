@@ -1,12 +1,15 @@
 import type { DataSource, EntityManager } from 'typeorm';
 import { Genero } from '../../commons/enums/genero.enum.js';
 import {
+  ROL_SUPERADMIN,
   ROLES_DEL_SISTEMA,
   Rol as NombreDeRol,
 } from '../../commons/enums/rol.enum.js';
 import { hashearPassword } from '../../commons/passwords.js';
 import { TipoVenta } from '../../commons/enums/tipo-venta.enum.js';
 import { dataSourceDeConsola } from '../../config/data-source.js';
+import { instalarAislamientoPorEmpresa } from '../../commons/tenant/aislamiento-rls.js';
+import { comoPlataforma, enEmpresa } from '../../commons/tenant/contexto-tenant.js';
 import { Bitacora } from '../../entities/bitacora.entity.js';
 import { Categoria } from '../../entities/categoria.entity.js';
 import { Ciudad } from '../../entities/ciudad.entity.js';
@@ -67,6 +70,89 @@ const DIAS_DE_HISTORIA = 120;
 const VENTAS_A_GENERAR = 60;
 const RESERVAS_A_GENERAR = 16;
 
+// --------------------------------------------------------------------------
+// Empresas de prueba (SaaS multiempresa)
+// --------------------------------------------------------------------------
+
+/**
+ * Cada empresa de prueba es un tenant independiente con su propio catalogo,
+ * personal, clientes, ventas y reservas. La segunda reutiliza los mismos datos
+ * base con otra marca, otro plan y otros usuarios (username y correo son unicos
+ * en toda la plataforma).
+ */
+interface EmpresaDemo {
+  slug: string;
+  nombre: string;
+  plan: 'basico' | 'profesional';
+  /** Marca que reemplaza a "FashionStore" en los nombres de sucursal. */
+  marca: string;
+  /** Se agrega a usernames y correos del personal y los clientes. */
+  sufijo: string;
+  admin: { username: string; correo: string };
+  semilla: number;
+}
+
+const EMPRESAS_DEMO: readonly EmpresaDemo[] = [
+  {
+    slug: 'fashionstore',
+    nombre: 'FashionStore',
+    plan: 'profesional',
+    marca: 'FashionStore',
+    sufijo: '',
+    admin: {
+      username: process.env.ADMIN_USERNAME || 'admin',
+      correo: process.env.ADMIN_CORREO || 'admin@tienda.com',
+    },
+    semilla: SEMILLA,
+  },
+  {
+    slug: 'urban-wear',
+    nombre: 'Urban Wear',
+    plan: 'basico',
+    marca: 'Urban Wear',
+    sufijo: '.urban',
+    admin: { username: 'admin.urban', correo: 'admin@urbanwear.com' },
+    semilla: SEMILLA + 7,
+  },
+];
+
+/** Datos derivados de la empresa demo que usan los sembradores. */
+interface Variante {
+  empresa: EmpresaDemo;
+  sucursales: readonly (typeof SUCURSALES)[number][];
+  /** Nombre de sucursal (de los datos base) -> nombre en esta empresa. */
+  sucursal: (nombreBase: string) => string;
+  username: (base: string) => string;
+  correo: (base: string) => string;
+}
+
+function variante(empresa: EmpresaDemo, maxSucursales: number): Variante {
+  const renombrar = (nombre: string) =>
+    nombre.replace('FashionStore', empresa.marca);
+  const sucursales = SUCURSALES.slice(0, maxSucursales).map((s) => ({
+    ...s,
+    nombre: renombrar(s.nombre),
+  }));
+  const incluidas = new Set(sucursales.map((s) => s.nombre));
+  const etiqueta = empresa.sufijo.replace(/^\./, '');
+
+  return {
+    empresa,
+    sucursales,
+    // Si el plan no alcanza para esa sucursal, se usa la primera.
+    sucursal: (nombreBase) => {
+      const nombre = renombrar(nombreBase);
+      return incluidas.has(nombre) ? nombre : sucursales[0].nombre;
+    },
+    username: (base) => base + empresa.sufijo,
+    correo: (base) => {
+      if (!etiqueta) return base;
+      const [local, dominio] = base.split('@');
+      return local + '+' + etiqueta + '@' + dominio;
+    },
+  };
+}
+
 /** Stock en memoria: se va descontando al generar ventas y reservas. */
 interface FilaDeStock {
   id: number;
@@ -92,8 +178,9 @@ async function sembrarRoles(
 async function sembrarAdministrador(
   manager: EntityManager,
   roles: Map<string, number>,
+  v: Variante,
 ): Promise<void> {
-  const username = process.env.ADMIN_USERNAME || 'admin';
+  const { username, correo } = v.empresa.admin;
   const usuarios = manager.getRepository(Usuario);
 
   if (await usuarios.findOne({ where: { username } })) {
@@ -104,8 +191,8 @@ async function sembrarAdministrador(
   await usuarios.save(
     usuarios.create({
       nombre: 'Admin',
-      apellido: 'Sistema',
-      correo: process.env.ADMIN_CORREO || 'admin@tienda.com',
+      apellido: v.empresa.nombre,
+      correo,
       username,
       password: await hashearPassword(process.env.ADMIN_PASSWORD || 'admin123'),
       genero: Genero.MASCULINO,
@@ -188,10 +275,11 @@ async function sembrarCatalogos(manager: EntityManager): Promise<Catalogos> {
 async function sembrarSucursales(
   manager: EntityManager,
   ciudades: Map<string, number>,
+  v: Variante,
 ): Promise<Map<string, number>> {
   const mapa = new Map<string, number>();
 
-  for (const sucursal of SUCURSALES) {
+  for (const sucursal of v.sucursales) {
     const fila = await asegurar(
       manager,
       Sucursal,
@@ -217,6 +305,7 @@ async function sembrarPersonas(
   manager: EntityManager,
   roles: Map<string, number>,
   sucursales: Map<string, number>,
+  v: Variante,
 ): Promise<{ personal: Usuario[]; clientes: Usuario[] }> {
   const password = await hashearPassword(
     process.env.SEED_PASSWORD || 'demo1234',
@@ -227,12 +316,12 @@ async function sembrarPersonas(
     const usuario = await asegurar(
       manager,
       Usuario,
-      { username: datos.username },
+      { username: v.username(datos.username) },
       {
         nombre: datos.nombre,
         apellido: datos.apellido,
-        correo: datos.correo,
-        username: datos.username,
+        correo: v.correo(datos.correo),
+        username: v.username(datos.username),
         password,
         genero: datos.genero,
         rol_id: idDe(roles, datos.rol),
@@ -252,7 +341,7 @@ async function sembrarPersonas(
             sumarDias(hoy, -datos.trabajador.antiguedadDias),
           ),
           sueldo: comoMonto(datos.trabajador.sueldo),
-          sucursal_id: idDe(sucursales, datos.trabajador.sucursal),
+          sucursal_id: idDe(sucursales, v.sucursal(datos.trabajador.sucursal)),
         },
       );
     }
@@ -413,6 +502,7 @@ async function sembrarStock(
 async function sembrarPromociones(
   manager: EntityManager,
   sucursales: Map<string, number>,
+  v: Variante,
 ): Promise<void> {
   const hoy = new Date();
 
@@ -426,7 +516,7 @@ async function sembrarPromociones(
         descripcion: promocion.descripcion,
         fecha_inicio: comoFecha(sumarDias(hoy, promocion.desdeDias)),
         fecha_final: comoFecha(sumarDias(hoy, promocion.hastaDias)),
-        sucursal_id: idDe(sucursales, promocion.sucursal),
+        sucursal_id: idDe(sucursales, v.sucursal(promocion.sucursal)),
       },
     );
   }
@@ -452,6 +542,7 @@ async function sembrarVentas(
   clientes: Usuario[],
   personal: Usuario[],
   rng: () => number,
+  semilla: number,
 ): Promise<VentaSembrada[]> {
   const ventas = manager.getRepository(Venta);
   const detalles = manager.getRepository(DetalleVenta);
@@ -501,7 +592,7 @@ async function sembrarVentas(
         tipo_venta: esVirtual ? TipoVenta.VIRTUAL : TipoVenta.PRESENCIAL,
         total: comoMonto(total),
         usuario_id: elegir(rng, clientes).id,
-        pago_id: esVirtual ? `pi_seed_${SEMILLA}_${i}` : null,
+        pago_id: esVirtual ? `pi_seed_${semilla}_${i}` : null,
       }),
     );
 
@@ -713,41 +804,128 @@ function activado(variable: string, porDefecto: boolean): boolean {
   return valor !== 'false' && valor !== '0' && valor !== 'no';
 }
 
-async function sembrarDemo(manager: EntityManager, roles: Map<string, number>) {
-  const rng = generador(SEMILLA);
+async function sembrarDemo(
+  manager: EntityManager,
+  roles: Map<string, number>,
+  v: Variante,
+) {
+  const rng = generador(v.empresa.semilla);
 
   const catalogos = await sembrarCatalogos(manager);
-  const sucursales = await sembrarSucursales(manager, catalogos.ciudades);
+  const sucursales = await sembrarSucursales(manager, catalogos.ciudades, v);
   const { personal, clientes } = await sembrarPersonas(
     manager,
     roles,
     sucursales,
+    v,
   );
 
   const imagenes = await copiarImagenesDeSeed();
   const productos = await sembrarProductos(manager, catalogos, imagenes);
   const stock = await sembrarStock(manager, productos, sucursales, rng);
-  await sembrarPromociones(manager, sucursales);
+  await sembrarPromociones(manager, sucursales, v);
 
-  const ventas = await sembrarVentas(manager, stock, clientes, personal, rng);
+  const ventas = await sembrarVentas(
+    manager,
+    stock,
+    clientes,
+    personal,
+    rng,
+    v.empresa.semilla,
+  );
   await sembrarReservas(manager, stock, clientes, rng);
   await actualizarStock(manager, stock);
 
   const admin = await manager.getRepository(Usuario).findOne({
-    where: { username: process.env.ADMIN_USERNAME || 'admin' },
+    where: { username: v.empresa.admin.username },
   });
   await sembrarBitacora(manager, ventas, personal, admin, rng);
 }
 
-async function main(): Promise<void> {
-  const dataSource: DataSource = dataSourceDeConsola();
-  await dataSource.initialize();
+/** Empresa y suscripcion vigente; devuelve el id y el limite de sucursales. */
+async function asegurarEmpresa(
+  manager: EntityManager,
+  empresa: EmpresaDemo,
+): Promise<{ id: number; maxSucursales: number }> {
+  const [plan] = await manager.query<{ id: number; max_sucursales: number }[]>(
+    `SELECT id, max_sucursales FROM planes WHERE codigo = $1`,
+    [empresa.plan],
+  );
+  if (!plan) {
+    throw new Error(`Falta el plan "${empresa.plan}": corre las migraciones`);
+  }
 
-  try {
-    const manager = dataSource.manager;
+  const [existente] = await manager.query<{ id: number }[]>(
+    `SELECT id FROM empresas WHERE slug = $1`,
+    [empresa.slug],
+  );
+  const id =
+    existente?.id ??
+    (
+      await manager.query<{ id: number }[]>(
+        `INSERT INTO empresas (nombre, slug, correo) VALUES ($1, $2, $3) RETURNING id`,
+        [empresa.nombre, empresa.slug, empresa.admin.correo],
+      )
+    )[0].id;
 
+  await manager.query(
+    `INSERT INTO suscripciones (empresa_id, plan_id, fecha_inicio, fecha_vencimiento, observacion)
+     SELECT $1, $2, current_date, current_date + 365, 'Empresa de prueba (seed)'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM suscripciones WHERE empresa_id = $1 AND estado = 'activa'
+      )`,
+    [id, plan.id],
+  );
+  console.log(`\n== empresa '${empresa.slug}' (id ${id}, plan ${empresa.plan})`);
+  return { id, maxSucursales: plan.max_sucursales };
+}
+
+/** Superadmin de la plataforma: sin empresa, con el rol "superadmin". */
+async function sembrarSuperadmin(manager: EntityManager): Promise<void> {
+  const username = process.env.PLATAFORMA_USERNAME || 'superadmin';
+  const [rol] = await manager.query<{ id: number }[]>(
+    `SELECT id FROM roles WHERE nombre = $1 AND empresa_id IS NULL`,
+    [ROL_SUPERADMIN],
+  );
+  if (!rol) throw new Error('Falta el rol superadmin: corre las migraciones');
+
+  const [existe] = await manager.query(
+    `SELECT 1 FROM usuarios WHERE username = $1`,
+    [username],
+  );
+  if (existe) {
+    console.log(`superadmin '${username}': ya existe`);
+    return;
+  }
+  const password =
+    process.env.PLATAFORMA_PASSWORD || process.env.SEED_PASSWORD || 'demo1234';
+  await manager.query(
+    `INSERT INTO usuarios (nombre, apellido, correo, username, password, rol_id, tipo, empresa_id)
+     VALUES ('Administrador', 'Plataforma', $1, $2, $3, $4, 'usuario', NULL)`,
+    [
+      process.env.PLATAFORMA_CORREO || 'plataforma@fashionstore.com',
+      username,
+      await hashearPassword(password),
+      rol.id,
+    ],
+  );
+  console.log(`superadmin '${username}': creado (password: ${password})`);
+}
+
+async function sembrarEmpresa(
+  manager: EntityManager,
+  empresa: EmpresaDemo,
+): Promise<void> {
+  const { id, maxSucursales } = await comoPlataforma(() =>
+    asegurarEmpresa(manager, empresa),
+  );
+  const v = variante(empresa, maxSucursales);
+
+  // Todo lo demas corre dentro de la empresa: RLS filtra las busquedas y cada
+  // INSERT recibe su empresa_id por defecto.
+  await enEmpresa(id, async () => {
     const roles = await sembrarRoles(manager);
-    await sembrarAdministrador(manager, roles);
+    await sembrarAdministrador(manager, roles, v);
 
     if (!activado('SEED_DEMO', true)) {
       console.log('datos de demostracion: omitidos (SEED_DEMO=false)');
@@ -763,8 +941,24 @@ async function main(): Promise<void> {
       return;
     }
 
-    await sembrarDemo(manager, roles);
-    console.log('seed completado');
+    await sembrarDemo(manager, roles, v);
+  });
+}
+
+async function main(): Promise<void> {
+  const dataSource: DataSource = dataSourceDeConsola();
+  // El seed tambien pasa por RLS: asi cada empresa solo ve (y no pisa) lo suyo.
+  instalarAislamientoPorEmpresa(dataSource);
+  await dataSource.initialize();
+
+  try {
+    const manager = dataSource.manager;
+
+    await comoPlataforma(() => sembrarSuperadmin(manager));
+    for (const empresa of EMPRESAS_DEMO) {
+      await sembrarEmpresa(manager, empresa);
+    }
+    console.log('\nseed completado');
   } finally {
     await dataSource.destroy();
   }

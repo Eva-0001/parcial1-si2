@@ -2,6 +2,10 @@ import { lazy } from 'react'
 
 export const Login = lazy(() => import('@/features/auth/pages/Login'))
 export const Registro = lazy(() => import('@/features/auth/pages/Registro'))
+export const RegistroEmpresa = lazy(() => import('@/features/empresa/pages/RegistroEmpresa'))
+export const MiPlan = lazy(() => import('@/features/empresa/pages/MiPlan'))
+export const PlataformaEmpresas = lazy(() => import('@/features/plataforma/pages/PlataformaEmpresas'))
+export const PlataformaPlanes = lazy(() => import('@/features/plataforma/pages/PlataformaPlanes'))
 
 export const Inicio = lazy(() => import('@/features/inicio/pages/Inicio'))
 export const Catalogo = lazy(() => import('@/features/catalogo/pages/Catalogo'))
@@ -57,4 +61,7 @@ export const Sincronizacion = lazy(() => import('@/features/sincronizacion/pages
 export const Tablero = lazy(() => import('@/features/tablero/pages/Tablero'))
 export const Bitacora = lazy(() => import('@/features/bitacora/pages/Bitacora'))
 export const ReportesVoz = lazy(() => import('@/features/reportes/pages/ReportesVoz'))
+export const Analitica = lazy(() => import('@/features/analitica/pages/Analitica'))
+export const Cambios = lazy(() => import('@/features/cambios/pages/Cambios'))
+export const NuevoCambio = lazy(() => import('@/features/cambios/pages/NuevoCambio'))
 export const ReservasSucursal = lazy(() => import('@/features/reservas/pages/ReservasSucursal'))

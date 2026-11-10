@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { cajaService } from '../services/caja.service'
-import { numeroTurno } from '../caja.utils'
+import { arqueoConPendientes, numeroTurno, ventasSinSincronizar } from '../caja.utils'
 import ResumenArqueo from '../components/ResumenArqueo'
 import ModalAbrirTurno from '../components/ModalAbrirTurno'
 import ModalMovimientoCaja from '../components/ModalMovimientoCaja'
 import ModalCerrarTurno from '../components/ModalCerrarTurno'
-import { TablaMovimientosCaja, TablaVentasTurno } from '../components/TablasTurno'
+import { TablaMovimientosCaja, TablaVentasPendientes, TablaVentasTurno } from '../components/TablasTurno'
 import { sucursalesService } from '@/features/sucursales/services/sucursales.service'
 import { useAuth } from '@/core/stores/auth.store'
 import { useVentasEnCola } from '@/core/offline/cola-ventas.store'
+import { usePedidosEnCola } from '@/core/offline/cola-pedidos.store'
+import { useConexionStore } from '@/core/offline/conexion.store'
 import Skeleton from '@/shared/components/Skeleton'
 import EstadoVacio from '@/shared/components/EstadoVacio'
 import { formatoFecha } from '@/shared/utils/formato'
@@ -27,17 +29,14 @@ export default function MiCaja() {
   const [conMovimiento, setConMovimiento] = useState(false)
   const [cerrando, setCerrando] = useState(false)
   const enCola = useVentasEnCola(auth.usuario?.id)
+  const pedidosEnCola = usePedidosEnCola(auth.usuario?.id)
+  const enLinea = useConexionStore((s) => s.enLinea)
 
   const pedir = useCallback(() => {
-    Promise.all([cajaService.turnoActual(), sucursalesService.listar()])
-      .then(([actual, lista]) => {
+    // Sin conexión el detalle sale de la última copia guardada en este equipo.
+    Promise.all([cajaService.detalleTurnoActual(), sucursalesService.listar().catch(() => [])])
+      .then(([d, lista]) => {
         setSucursales(lista)
-        if (!actual.turno) return null
-        // Sin conexión solo se conoce el último arqueo guardado.
-        if (actual.sin_conexion) return { ...actual, movimientos: [], ventas: [], sin_conexion: true }
-        return cajaService.obtenerTurno(actual.turno.id)
-      })
-      .then((d) => {
         setDetalle(d)
         setError(null)
         setCargando(false)
@@ -48,9 +47,19 @@ export default function MiCaja() {
       })
   }, [])
 
+  // Se vuelve a pedir cuando una venta offline llega al servidor (su arqueo ya la incluye
+  // y deja de sumarse como provisional). Sin conexión solo relee la copia local.
+  const enviadas = enCola.filter((v) => v.venta_id).length
+  const cantidadEnCola = enCola.length + pedidosEnCola.length
   useEffect(() => {
     pedir()
-  }, [pedir])
+  }, [pedir, cantidadEnCola, enviadas])
+
+  // Al volver la conexión se cambia la copia guardada por el arqueo real del servidor.
+  const conCopia = Boolean(detalle?.sin_conexion)
+  useEffect(() => {
+    if (enLinea && conCopia) pedir()
+  }, [enLinea, conCopia, pedir])
 
   const recargar = () => {
     setCargando(true)
@@ -82,9 +91,14 @@ export default function MiCaja() {
               icono="point_of_sale"
               titulo="No tienes un turno abierto"
               descripcion="Abre un turno con el efectivo inicial de la caja para empezar a cobrar en el punto de venta."
-              textoAccion="Abrir turno"
-              onAccion={() => setAbriendo(true)}
+              textoAccion={enLinea ? 'Abrir turno' : undefined}
+              onAccion={enLinea ? () => setAbriendo(true) : undefined}
             />
+            {!enLinea && (
+              <p className="pb-2 text-center text-sm text-on-surface-variant">
+                Sin conexión no se puede abrir un turno. Ábrelo cuando vuelva la conexión.
+              </p>
+            )}
             <p className="pb-2 text-center text-sm">
               <Link to="/panel/turnos" className="text-primary hover:underline">
                 Ver mis turnos anteriores
@@ -106,13 +120,17 @@ export default function MiCaja() {
     )
   }
 
-  const { turno, resumen, movimientos, ventas } = detalle
-  const sinConexion = Boolean(detalle.sin_conexion)
+  const { turno, movimientos, ventas } = detalle
+  const sinConexion = Boolean(detalle.sin_conexion) || !enLinea
+  // Ventas cobradas en este equipo que el servidor aún no sumó: el arqueo las incluye como provisionales.
+  const pendientes = ventasSinSincronizar(turno.id, enCola, pedidosEnCola)
+  const resumen = arqueoConPendientes(turno, detalle.resumen, pendientes)
   // Cerrar con ventas sin enviar dejaría el arqueo incompleto.
+  const sinEnviar = enCola.length + pedidosEnCola.filter((p) => p.payload.tipo_venta === 'presencial').length
   const bloqueoCierre = sinConexion
-    ? 'Sin conexión no se puede cerrar el turno.'
-    : enCola.length > 0
-      ? `Hay ${enCola.length} venta(s) de este equipo sin sincronizar: envíalas antes de cerrar.`
+    ? 'Sin conexión no se puede cerrar el turno ni registrar ingresos o egresos.'
+    : sinEnviar > 0
+      ? `Hay ${sinEnviar} venta(s) de este equipo sin sincronizar: envíalas antes de cerrar.`
       : null
 
   return (
@@ -151,8 +169,10 @@ export default function MiCaja() {
             <span className="flex-1">
               {bloqueoCierre}{' '}
               {sinConexion
-                ? 'Este es el último arqueo guardado; puedes seguir cobrando en el punto de venta.'
-                : 'Las ventas cobradas sin conexión todavía no están sumadas en este arqueo.'}
+                ? `Arqueo guardado${detalle.guardado_en ? ` el ${formatoFecha(detalle.guardado_en, 'dd/MM/yyyy HH:mm')}` : ''}${
+                    pendientes.length > 0 ? ` más ${pendientes.length} venta(s) cobradas sin conexión (provisional)` : ''
+                  }. Puedes seguir cobrando en el punto de venta.`
+                : 'El arqueo ya las incluye como provisionales; se confirman al sincronizar.'}
             </span>
             {enCola.length > 0 && (
               <Link to="/panel/sincronizacion" className="font-semibold underline">
@@ -177,6 +197,15 @@ export default function MiCaja() {
           </h2>
           <TablaVentasTurno ventas={ventas} conEnlace={auth.esAdmin} />
         </section>
+
+        {pendientes.length > 0 && (
+          <section className="tarjeta p-0">
+            <h2 className="border-b border-outline-variant px-6 py-4 text-sm font-semibold text-on-surface">
+              Ventas sin sincronizar ({pendientes.length})
+            </h2>
+            <TablaVentasPendientes ventas={pendientes} />
+          </section>
+        )}
       </div>
 
       {conMovimiento && (

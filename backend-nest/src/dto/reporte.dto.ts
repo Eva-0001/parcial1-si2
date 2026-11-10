@@ -37,11 +37,16 @@ export class FiltroReporteInventarioDto {
 
 export const TIPOS_REPORTE = [
   'ventas_por_dia',
+  'ventas_por_semana',
+  'ventas_por_mes',
   'ventas_por_sucursal',
+  'ventas_por_categoria',
   'top_productos',
   'inventario_por_sucursal',
   'por_reponer',
   'reservas',
+  'prediccion_demanda',
+  'segmentos_clientes',
 ] as const;
 
 export type TipoReporte = (typeof TIPOS_REPORTE)[number];
@@ -50,6 +55,9 @@ export interface ParametrosReporte {
   desde?: string;
   hasta?: string;
   sucursal_id?: number;
+  categoria_id?: number;
+  /** Modelo de prenda (el "producto" de la pregunta). */
+  modelo_id?: number;
   top?: number;
   umbral?: number;
 }

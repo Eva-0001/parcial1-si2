@@ -1,3 +1,4 @@
+import { comoPlataforma } from '../commons/tenant/contexto-tenant.js';
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, type EntityManager, In, Repository } from 'typeorm';
@@ -92,6 +93,15 @@ export class ReservasRepository {
         { horas },
       )
       .getMany();
+  }
+
+  idsDeEmpresasActivas(): Promise<number[]> {
+    return comoPlataforma(async () => {
+      const filas = await this.dataSource.query<{ id: number }[]>(
+        `SELECT id FROM empresas WHERE estado = 'activa' ORDER BY id`,
+      );
+      return filas.map((fila) => fila.id);
+    });
   }
 
   transaccion<T>(
