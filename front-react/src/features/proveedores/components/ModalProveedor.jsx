@@ -34,7 +34,7 @@ export default function ModalProveedor({ proveedor = null, nombresOcupados = [],
       nombre: v.nombre.trim(),
       descripcion: v.descripcion.trim() || null,
       encargado: v.encargado.trim() || null,
-      telefono: v.telefono.trim() ? Number(v.telefono.trim()) : null,
+      telefono: v.telefono.trim() || null,
     }
 
     const peticion = proveedor
