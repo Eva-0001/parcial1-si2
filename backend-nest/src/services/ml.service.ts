@@ -25,12 +25,15 @@ import {
   type ModeloGuardado,
 } from '../repositories/ml.repository.js';
 
-/** Semanas de historial sintetico (18 meses). */
-const SEMANAS_DE_HISTORIA = 78;
+/**
+ * Filas sinteticas de demanda semanal por empresa. Las semanas de historial
+ * se calculan a partir de este total: ceil(5000 / (sucursales x categorias)).
+ */
+const FILAS_DEMANDA_SINTETICAS = 5000;
 /** Ultimas semanas que se reservan para evaluar (no se usan para entrenar). */
 const SEMANAS_DE_PRUEBA = 12;
 const SEMANAS_A_PREDECIR = 4;
-const CLIENTES_SINTETICOS = 400;
+const CLIENTES_SINTETICOS = 5000;
 const DIA_MS = 24 * 60 * 60 * 1000;
 
 const PARAMETROS_BOSQUE = {
@@ -98,10 +101,11 @@ export class MlService {
   // ======================================================= datos sinteticos
 
   /**
-   * Genera 18 meses de demanda semanal por sucursal y categoria con patrones
-   * realistas (temporada, fiestas, inicio de mes, promociones, tendencia y
-   * ruido) y le suma las ventas reales del sistema. Tambien genera clientes
-   * con cuatro perfiles de compra para la segmentacion.
+   * Genera exactamente FILAS_DEMANDA_SINTETICAS filas de demanda semanal por
+   * sucursal y categoria con patrones realistas (temporada, fiestas, inicio
+   * de mes, promociones, tendencia y ruido) y le suma las ventas reales del
+   * sistema. Tambien genera CLIENTES_SINTETICOS clientes con cuatro perfiles
+   * de compra para la segmentacion.
    */
   async generarDatos() {
     const empresaId = empresaActualId();
@@ -117,9 +121,17 @@ export class MlService {
     const actual = lunesDe(new Date());
     const filas: FilaDemanda[] = [];
 
+    // Semanas por serie para llegar al total; las primeras `sobrantes` series
+    // llevan una semana menos (la mas antigua) para que el total sea exacto.
+    const nSeries = sucursales.length * categorias.length;
+    const semanasPorSerie = Math.ceil(FILAS_DEMANDA_SINTETICAS / nSeries);
+    const sobrantes = semanasPorSerie * nSeries - FILAS_DEMANDA_SINTETICAS;
+    let indiceSerie = 0;
+
     for (const sucursal of sucursales) {
       const tamano = 0.7 + 0.7 * rng();
       for (const categoria of categorias) {
+        const semanasSerie = semanasPorSerie - (indiceSerie++ < sobrantes ? 1 : 0);
         const popularidad =
           totalReal > 0
             ? Math.min(2.5, Math.max(0.3, (categoria.unidades / totalReal) * categorias.length))
@@ -132,7 +144,7 @@ export class MlService {
             : 'neutra';
         const base = 12 * tamano * popularidad;
 
-        for (let i = SEMANAS_DE_HISTORIA; i >= 1; i--) {
+        for (let i = semanasSerie; i >= 1; i--) {
           const semana = sumarDias(actual, -7 * i);
           const diaDelAnio = (semana.getTime() - Date.UTC(semana.getUTCFullYear(), 0, 1)) / DIA_MS;
           const ciclo = (pico: number) => Math.cos((2 * Math.PI * (diaDelAnio - pico)) / 365);
@@ -145,7 +157,7 @@ export class MlService {
           if (semana.getUTCDate() <= 7) lambda *= 1.2; // semana de cobro de sueldos
           const promocion = rng() < 0.15;
           if (promocion) lambda *= 1.5;
-          lambda *= 1 + 0.004 * (SEMANAS_DE_HISTORIA - i); // crecimiento del negocio
+          lambda *= 1 + 0.004 * (semanasPorSerie - i); // crecimiento del negocio
           lambda *= 1 + 0.1 * normal(rng); // ruido
 
           const unidades = Math.max(0, Math.round(lambda));
