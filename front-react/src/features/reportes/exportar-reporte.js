@@ -205,82 +205,216 @@ export async function exportarXlsx(reporte, { empresa = 'FashionStore' } = {}) {
 
 // ------------------------------------------------------------------ PDF
 
-export async function exportarPdf(reporte, { empresa = 'FashionStore' } = {}) {
+const TINTA = [17, 24, 39]
+const GRIS_TEXTO = [75, 85, 99]
+const GRIS_SUAVE = [107, 114, 128]
+const GRIS_LINEA = [209, 213, 219]
+const FONDO_CAJA = [248, 250, 252]
+const FONDO_PRIMARIO_SUAVE = [238, 242, 255]
+
+// Medidas en mm. El encabezado y el pie se repiten en todas las páginas.
+const MARGEN = 15
+const ALTO_ENCABEZADO = 26
+const INICIO_CONTENIDO = ALTO_ENCABEZADO + 8
+const ALTO_PIE = 18
+
+export async function exportarPdf(reporte, { empresa = 'FashionStore', usuario } = {}) {
   const [{ jsPDF }, { autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')])
   const { encabezados, filas, totales } = datosDeTabla(reporte)
 
   const doc = new jsPDF({ orientation: encabezados.length > 5 ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' })
   const ancho = doc.internal.pageSize.getWidth()
-  const margen = 14
-  let y = 16
+  const alto = doc.internal.pageSize.getHeight()
+  const anchoUtil = ancho - MARGEN * 2
+  const limiteInferior = alto - ALTO_PIE - 4
+  const emitido = fechaEmision()
+  let y = INICIO_CONTENIDO
 
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(15)
-  doc.setTextColor(...COLOR_PRIMARIO)
-  doc.text(empresa, margen, y)
+  doc.setProperties({ title: reporte.titulo, author: empresa, creator: empresa, subject: 'Reporte de gestión' })
 
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(9)
-  doc.setTextColor(107, 114, 128)
-  doc.text(`Emitido el ${fechaEmision()}`, ancho - margen, y, { align: 'right' })
-
-  y += 8
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(12)
-  doc.setTextColor(17, 24, 39)
-  doc.text(reporte.titulo, margen, y)
-
-  const filtros = lineasDeFiltros(reporte)
-  if (filtros.length) {
-    y += 6
-    doc.setFontSize(9)
-    const texto = filtros.map(([e, v]) => `${e}: ${v}`).join('   ·   ')
-    const lineas = doc.splitTextToSize(texto, ancho - margen * 2)
-    doc.setFont('helvetica', 'normal')
-    doc.setTextColor(75, 85, 99)
-    doc.text(lineas, margen, y)
-    y += (lineas.length - 1) * 4
+  const fuente = (estilo, tamano, color = TINTA) => {
+    doc.setFont('helvetica', estilo)
+    doc.setFontSize(tamano)
+    doc.setTextColor(...color)
   }
 
-  y += 4
-  doc.setDrawColor(...COLOR_PRIMARIO)
-  doc.setLineWidth(0.5)
-  doc.line(margen, y, ancho - margen, y)
+  const asegurarEspacio = (necesario) => {
+    if (y + necesario <= limiteInferior) return
+    doc.addPage()
+    y = INICIO_CONTENIDO
+  }
+
+  /** Título de sección con una barra de color a la izquierda. */
+  const tituloSeccion = (texto) => {
+    asegurarEspacio(14)
+    doc.setFillColor(...COLOR_PRIMARIO)
+    doc.rect(MARGEN, y - 4, 1.2, 5.5, 'F')
+    fuente('bold', 11)
+    doc.text(texto.toUpperCase(), MARGEN + 4, y)
+    y += 6
+  }
+
+  const parrafo = (texto) => {
+    fuente('normal', 9.5, GRIS_TEXTO)
+    const lineas = doc.splitTextToSize(String(texto), anchoUtil)
+    for (const linea of lineas) {
+      asegurarEspacio(5)
+      doc.text(linea, MARGEN, y)
+      y += 4.6
+    }
+    y += 3
+  }
+
+  const vinetas = (items, numeradas = false) => {
+    items.forEach((item, i) => {
+      fuente('normal', 9.5, GRIS_TEXTO)
+      const lineas = doc.splitTextToSize(String(item), anchoUtil - 7)
+      asegurarEspacio(lineas.length * 4.6 + 1)
+      if (numeradas) {
+        fuente('bold', 9.5, COLOR_PRIMARIO)
+        doc.text(`${i + 1}.`, MARGEN + 1, y)
+        fuente('normal', 9.5, GRIS_TEXTO)
+      } else {
+        doc.setFillColor(...COLOR_PRIMARIO)
+        doc.circle(MARGEN + 2, y - 1.2, 0.8, 'F')
+      }
+      doc.text(lineas, MARGEN + 7, y)
+      y += lineas.length * 4.6 + 1.6
+    })
+    y += 3
+  }
+
+  // ---- Bloque de título (solo primera página)
+  fuente('normal', 9, GRIS_SUAVE)
+  doc.text('REPORTE DE GESTIÓN', MARGEN, y)
+  y += 7
+  fuente('bold', 17)
+  const lineasTitulo = doc.splitTextToSize(reporte.titulo, anchoUtil)
+  doc.text(lineasTitulo, MARGEN, y)
+  y += lineasTitulo.length * 7 + 2
+
+  // ---- Ficha del reporte: filtros, fecha y quién lo generó
+  const ficha = [
+    ...lineasDeFiltros(reporte),
+    ['Fecha de emisión', emitido],
+    ...(usuario ? [['Generado por', usuario]] : []),
+    ['Registros', formatoEntero.format(filas.length)],
+  ]
+  const anchoEtiqueta = 38
+  fuente('normal', 9)
+  const filasFicha = ficha.map(([etiqueta, valor]) => [etiqueta, doc.splitTextToSize(String(valor), anchoUtil - anchoEtiqueta - 8)])
+  const altoFicha = filasFicha.reduce((a, [, lineas]) => a + lineas.length * 4.4 + 1.6, 0) + 6
+  doc.setFillColor(...FONDO_CAJA)
+  doc.setDrawColor(226, 232, 240)
+  doc.setLineWidth(0.2)
+  doc.roundedRect(MARGEN, y, anchoUtil, altoFicha, 1.5, 1.5, 'FD')
+  let yFicha = y + 6
+  for (const [etiqueta, lineas] of filasFicha) {
+    fuente('bold', 9, GRIS_SUAVE)
+    doc.text(etiqueta, MARGEN + 4, yFicha)
+    fuente('normal', 9, TINTA)
+    doc.text(lineas, MARGEN + 4 + anchoEtiqueta, yFicha)
+    yFicha += lineas.length * 4.4 + 1.6
+  }
+  y += altoFicha + 9
+
+  // ---- Resumen ejecutivo de la IA, antes de la tabla
+  if (reporte.resumen) {
+    tituloSeccion('Resumen ejecutivo')
+    parrafo(reporte.resumen)
+  }
+
+  tituloSeccion('Detalle')
 
   const alineacion = Object.fromEntries(
     encabezados.map((h, i) => [i, { halign: filas.some((f) => typeof f[i] === 'number') ? 'right' : 'left' }]),
   )
 
   autoTable(doc, {
-    startY: y + 4,
-    margin: { left: margen, right: margen, bottom: 18 },
+    startY: y,
+    margin: { left: MARGEN, right: MARGEN, top: INICIO_CONTENIDO, bottom: ALTO_PIE + 4 },
     head: [encabezados],
     body: filas.length
       ? filas.map((f) => f.map((c, i) => textoCelda(c, encabezados[i])))
       : [[{ content: 'Sin datos para este reporte.', colSpan: encabezados.length, styles: { halign: 'center' } }]],
     foot: totales ? [totales.map((c, i) => (c === '' ? '' : textoCelda(c, encabezados[i])))] : undefined,
     showFoot: 'lastPage',
-    theme: 'grid',
-    styles: { font: 'helvetica', fontSize: 9, cellPadding: 2, lineColor: [209, 213, 219], lineWidth: 0.1 },
-    headStyles: { fillColor: COLOR_PRIMARIO, textColor: 255, fontStyle: 'bold', halign: 'center' },
-    footStyles: { fillColor: [238, 242, 255], textColor: [17, 24, 39], fontStyle: 'bold' },
+    theme: 'striped',
+    styles: {
+      font: 'helvetica',
+      fontSize: 9,
+      cellPadding: { top: 2.4, bottom: 2.4, left: 2.5, right: 2.5 },
+      textColor: TINTA,
+      lineColor: GRIS_LINEA,
+      lineWidth: { bottom: 0.1 },
+    },
+    headStyles: { fillColor: COLOR_PRIMARIO, textColor: 255, fontStyle: 'bold', halign: 'center', lineWidth: 0 },
+    footStyles: {
+      fillColor: FONDO_PRIMARIO_SUAVE,
+      textColor: TINTA,
+      fontStyle: 'bold',
+      lineColor: COLOR_PRIMARIO,
+      lineWidth: { top: 0.5 },
+    },
     alternateRowStyles: { fillColor: [249, 250, 251] },
     columnStyles: alineacion,
     didParseCell: (data) => {
       if (data.section === 'foot') data.cell.styles.halign = alineacion[data.column.index]?.halign ?? 'left'
     },
   })
+  y = doc.lastAutoTable.finalY + 10
 
-  // Pie de página en todas las hojas.
+  // ---- Hallazgos y recomendaciones de la IA, después de la tabla
+  if (reporte.hallazgos?.length) {
+    tituloSeccion('Hallazgos')
+    vinetas(reporte.hallazgos)
+  }
+  if (reporte.recomendaciones?.length) {
+    tituloSeccion('Recomendaciones')
+    vinetas(reporte.recomendaciones, true)
+  }
+
+  // ---- Encabezado y pie en todas las páginas (al final, para saber el total)
   const paginas = doc.getNumberOfPages()
-  const alto = doc.internal.pageSize.getHeight()
+  const inicial = (empresa.trim()[0] || 'R').toUpperCase()
   for (let i = 1; i <= paginas; i++) {
     doc.setPage(i)
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(8)
-    doc.setTextColor(156, 163, 175)
-    doc.text(`${empresa} · ${reporte.titulo}`, margen, alto - 8)
-    doc.text(`Página ${i} de ${paginas}`, ancho - margen, alto - 8, { align: 'right' })
+
+    // Franja superior de color
+    doc.setFillColor(...COLOR_PRIMARIO)
+    doc.rect(0, 0, ancho, 3, 'F')
+
+    // Monograma de la empresa
+    doc.setFillColor(...COLOR_PRIMARIO)
+    doc.roundedRect(MARGEN, 9, 11, 11, 2, 2, 'F')
+    fuente('bold', 13, [255, 255, 255])
+    doc.text(inicial, MARGEN + 5.5, 16.6, { align: 'center' })
+
+    fuente('bold', 12)
+    doc.text(empresa, MARGEN + 14, 13.8)
+    fuente('normal', 8, GRIS_SUAVE)
+    doc.text('Sistema de gestión comercial', MARGEN + 14, 18.4)
+
+    // Título corto del reporte y fecha a la derecha
+    fuente('bold', 9, GRIS_TEXTO)
+    const tituloCorto = doc.splitTextToSize(reporte.titulo, anchoUtil / 2)[0]
+    doc.text(tituloCorto, ancho - MARGEN, 13.8, { align: 'right' })
+    fuente('normal', 8, GRIS_SUAVE)
+    doc.text(`Emitido el ${emitido}`, ancho - MARGEN, 18.4, { align: 'right' })
+
+    doc.setDrawColor(...GRIS_LINEA)
+    doc.setLineWidth(0.3)
+    doc.line(MARGEN, ALTO_ENCABEZADO - 2, ancho - MARGEN, ALTO_ENCABEZADO - 2)
+
+    // Pie: línea, leyenda y numeración
+    const yPie = alto - 10
+    doc.setDrawColor(...GRIS_LINEA)
+    doc.setLineWidth(0.3)
+    doc.line(MARGEN, yPie - 5, ancho - MARGEN, yPie - 5)
+    fuente('normal', 7.5, GRIS_SUAVE)
+    doc.text(`${empresa} · Documento generado automáticamente · Uso interno`, MARGEN, yPie)
+    fuente('bold', 8, GRIS_TEXTO)
+    doc.text(`Página ${i} de ${paginas}`, ancho - MARGEN, yPie, { align: 'right' })
   }
 
   doc.save(nombreArchivo(reporte, 'pdf'))

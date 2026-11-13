@@ -16,7 +16,7 @@ import { useNivelMicrofono } from '@/shared/hooks/useNivelMicrofono'
 
 export default function ReportesVoz() {
   const referencias = useReferencias()
-  const { esAdmin, esEncargado, esCajero } = useAuth()
+  const { esAdmin, esEncargado, esCajero, usuario } = useAuth()
   const deSucursal = esEncargado || esCajero
   const modoSinIa = esAdmin ? 'local' : 'sin-ia'
   // Plan sin reportes generativos: solo los reportes convencionales.
@@ -209,7 +209,10 @@ export default function ReportesVoz() {
     if (!reporte || exportando) return
     setExportando(formato)
     try {
-      const opciones = { empresa: empresa?.nombre ?? 'FashionStore' }
+      const opciones = {
+        empresa: empresa?.nombre ?? 'FashionStore',
+        usuario: usuario ? [usuario.nombre, usuario.apellido].filter(Boolean).join(' ') || usuario.username : undefined,
+      }
       if (formato === 'pdf') await generarPdf(reporte, opciones)
       else await exportarXlsx(reporte, opciones)
     } catch (e) {
