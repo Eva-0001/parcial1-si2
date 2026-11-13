@@ -82,6 +82,21 @@ services:
     ports:
       - "${WEB_PORT:-8080}:80"
 
+  # HTTPS delante del front. El microfono (reporte hablado) solo funciona en
+  # https; Caddy saca solo el certificado de Let's Encrypt para el dominio
+  # sslip.io de la IP del servidor. Necesita los puertos 80 y 443 abiertos.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    command: caddy reverse-proxy --from ${DOMINIO_HTTPS:-135-237-121-109.sslip.io} --to web:80
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - datos_caddy:/data
+
   # Consola web para mirar la base. Solo herramienta de desarrollo: no la
   # publiques fuera de tu maquina, entra sin login y llega directo al Postgres.
   pgadmin:
@@ -107,4 +122,5 @@ services:
 volumes:
   datos_postgres:
   datos_pgadmin:
+  datos_caddy:
   imagenes:
